@@ -1412,27 +1412,58 @@
     // Agent password is verified SERVER-SIDE via POST /api/agent-verify.
     // No password string ships in the client bundle.
 
-    // Dark mode
-    function initDarkMode() {
+    // Dark mode.
+    //
+    // The signed-out INTRO page (the login "landing") is always rendered
+    // dark -- its background.svg is painted for the dark navy palette, and
+    // there is no light-mode styling for it. Only the signed-in dashboard
+    // follows the user's light/dark choice. So we keep two things separate:
+    //   1. the transient <html data-theme> we paint for whatever view is up
+    //      (forced dark while the intro is showing), and
+    //   2. the user's saved preference, which drives the in-app toggle and
+    //      is never overwritten by a forced-dark intro.
+    let isIntroScreen = true; // we start on the always-dark intro/login view
+
+    // User's real preference (saved value, falling back to OS preference).
+    function userWantsDarkTheme() {
       const saved = localStorage.getItem('theme');
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const isDark = saved === 'dark' || (!saved && prefersDark);
-      applyDarkMode(isDark);
-      document.getElementById('darkModeToggle').checked = isDark;
+      const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      return saved === 'dark' || (!saved && systemDark);
     }
 
-    function applyDarkMode(isDark) {
+    // Paint ONLY -- never writes localStorage, so it can't clobber a saved
+    // light preference while the intro is forcing dark.
+    function paintTheme(isDark) {
       document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
       const thumb = document.getElementById('darkModeThumb');
       if (thumb) {
         thumb.style.transform = isDark ? 'translateX(24px)' : 'translateX(0)';
       }
+    }
+
+    // Init/toggle the theme. The intro is always dark; once inside the
+    // dashboard we follow the user's saved preference.
+    function initDarkMode() {
+      const userDark = userWantsDarkTheme();
+      paintTheme(isIntroScreen ? true : userDark);
+      // The checkbox reflects the user's real choice for when the app shows;
+      // keep the forced-dark intro from persisting that preference.
+      const toggle = document.getElementById('darkModeToggle');
+      if (toggle) toggle.checked = userDark;
+    }
+
+    // Called by the explicit settings toggle: persist the user's choice.
+    function toggleDarkMode() {
+      const isDark = document.getElementById('darkModeToggle').checked;
+      paintTheme(isDark);
       localStorage.setItem('theme', isDark ? 'dark' : 'light');
     }
 
-    function toggleDarkMode() {
-      const isDark = document.getElementById('darkModeToggle').checked;
-      applyDarkMode(isDark);
+    // showApp() -> entering the dashboard: stop forcing dark, use the
+    // user's theme. hideApp() -> back on the intro: force dark again.
+    function setIntroScreen(active) {
+      isIntroScreen = active;
+      paintTheme(active ? true : userWantsDarkTheme());
     }
 
     // ── Notification preferences ───────────────────────────────────────
@@ -2889,11 +2920,13 @@
         console.error('[DEBUG] bindNotifPushLifecycle error:', e);
       }
 
-      // Hide landing page, show loading
+      // Hide landing page, show loading. We're now inside the dashboard, so
+      // stop forcing the intro-dark theme and adopt the user's choice.
       const landingPage = document.getElementById('landingPage');
       const appLoading = document.getElementById('appLoading');
       console.log('[DEBUG] landingPage:', !!landingPage, 'appLoading:', !!appLoading);
 
+      setIntroScreen(false);
       if (landingPage) landingPage.style.display = 'none';
       if (appLoading) appLoading.classList.remove('hidden');
 
@@ -3584,6 +3617,9 @@
     }
 
     function hideApp() {
+      // Back on the intro/login view -- force it back to dark regardless of
+      // the theme the user had chosen inside the dashboard.
+      setIntroScreen(true);
       document.getElementById('landingPage').style.display = 'block';
       document.getElementById('appContainer').classList.remove('visible');
       document.getElementById('loginUsername').value = '';
