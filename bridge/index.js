@@ -434,8 +434,8 @@ async function runAgent(task, controller) {
   throw lastErr;
 }
 
-// --- task handling (serialized per DM, typing indicator) ---------------------
-const chains = new Map();         // convId -> Promise (per-DM serialization)
+// --- task handling (serialized per gateway session lane, typing indicator) ---
+const chains = new Map();         // sessionKey -> Promise (per-session serialization)
 const typingOn = new Map();       // convId -> number of queued tasks
 const activeByConv = new Map();   // convId -> taskId (running task, for agent events)
 const activeBySession = new Map(); // gateway sessionKey -> taskId (session-switched tasks)
@@ -942,11 +942,20 @@ async function handleTask(task) {
   typingOn.set(convId, pending);
   if (pending === 1) socket.emit('typing:start', { roomType: 'dm', roomId: convId });
 
-  const prev = chains.get(convId) || Promise.resolve();
+  // Serialize per gateway session lane, not per DM conversation: the gateway
+  // rejects concurrent runs for the SAME session, but a session-routed send
+  // targets a different session and must start immediately — queuing it
+  // behind the active DM run made every cross-session send look dead.
+  const lane = sessionKey;
+  const isDmLane = lane === dmSessionKey(convId);
+  const prev = chains.get(lane) || Promise.resolve();
   const run = prev
     .catch(() => {})
     .then(() => {
-      activeByConv.set(convId, taskId);
+      // activeByConv is only the fallback lookup for DM-session agent events;
+      // keep it pointing at the DM lane's task even while a routed task for
+      // another session runs concurrently.
+      if (isDmLane) activeByConv.set(convId, taskId);
       activeBySession.set(sessionKey, taskId);
       taskSessionKeys.set(taskId, sessionKey);
       return runAgent(task, controller);
@@ -973,10 +982,10 @@ async function handleTask(task) {
       if (activeByConv.get(convId) === taskId) activeByConv.delete(convId);
       if (activeBySession.get(sessionKey) === taskId) activeBySession.delete(sessionKey);
     });
-  chains.set(convId, run);
+  chains.set(lane, run);
 
   await run;
-  if (chains.get(convId) === run) chains.delete(convId);
+  if (chains.get(lane) === run) chains.delete(lane);
   const left = (typingOn.get(convId) || 1) - 1;
   if (left <= 0) {
     typingOn.delete(convId);

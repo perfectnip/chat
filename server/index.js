@@ -1308,7 +1308,11 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
   }
   const controller = new AbortController();
   const active = { kind: 'deepseek', taskId: triggerMsgId, controller, sessionKey: getAgentSession() || '' };
-  helperActiveByRoom.set(roomKey, active);
+  // Track only DM-lane tasks in the per-room busy map. Session-routed tasks
+  // run concurrently (different gateway session) and must not clobber the
+  // DM run's entry — the guard above and stop routing read this map for the
+  // DM lane only.
+  if (!sessionRouted) helperActiveByRoom.set(roomKey, active);
   io?.to(roomKey).emit('helper:busy', { status: 'start', taskId: triggerMsgId, roomType, roomId, sessionKey: active.sessionKey });
   try {
     // ── OpenClaw bridge: the owner's private full assistant (DM only) ──
@@ -1392,7 +1396,9 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
       console.error('[helper-bot] Error:', err);
     }
   } finally {
-    if (helperActiveByRoom.get(roomKey) === active) helperActiveByRoom.delete(roomKey);
+    if (!sessionRouted) {
+      if (helperActiveByRoom.get(roomKey) === active) helperActiveByRoom.delete(roomKey);
+    }
     io?.to(roomKey).emit('helper:busy', { status: 'end', taskId: triggerMsgId, roomType, roomId, sessionKey: active.sessionKey || '' });
   }
 }
