@@ -3448,6 +3448,20 @@ select:focus {
 .hc-session-menu[hidden] {
   display: none;
 }
+/* Viewport-aware positioning (toggled from JS at open time): flip above
+   the trigger when there's no room below, and right-align when the menu
+   would spill off the right edge of the screen. */
+.hc-session-menu-flip {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.hc-session-menu-right {
+  left: auto;
+  right: 0;
+}
+.hc-session-menu {
+  max-width: min(320px, calc(100vw - 16px));
+}
 .hc-session-opt {
   display: flex;
   align-items: center;

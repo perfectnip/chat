@@ -3121,6 +3121,11 @@ function connectSocket() {
   });
   s.on('helper:question:resolve-failed', (p) => {
     if (!p?.recordId) return;
+    // Dead record: the bridge also sends resolved for these, but drop the
+    // stale card immediately so the error never lingers on screen.
+    if (/not found|cancelled|expired/i.test(String(p?.error || ''))) {
+      delete state.helperQuestions[p.recordId];
+    }
     const key = p.questionId ? `${p.recordId}:${p.questionId}` : '';
     if (key) {
       state.helperQuestionSending[key] = false;
@@ -6558,6 +6563,36 @@ if (typeof document !== 'undefined') {
     document.querySelectorAll('.hc-session-menu').forEach((m) => { m.hidden = true; });
     document.querySelectorAll('.hc-session-trigger').forEach((t) => t.setAttribute('aria-expanded', 'false'));
   };
+  // Keep the session dropdown fully on screen: measure the trigger against
+  // the viewport and flip above / right-align / cap height as needed.
+  // MENU_GAP must match the CSS top/bottom offset (4px) of .hc-session-menu,
+  // and the inline cap must never EXCEED the CSS max-height (260px) or the
+  // menu grows instead of shrinking.
+  const positionSessionMenu = (picker, menu) => {
+    menu.classList.remove('hc-session-menu-flip', 'hc-session-menu-right');
+    menu.style.maxHeight = '';
+    const trigger = picker.querySelector('.hc-session-trigger');
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const MENU_GAP = 4;
+    const EDGE = 8;
+    const cssMax = parseFloat(getComputedStyle(menu).maxHeight) || 260;
+    const height = Math.min(menu.offsetHeight, cssMax);
+    // Horizontal: right-align when left-anchored would spill off-screen.
+    if (r.left + menu.offsetWidth > vw) {
+      menu.classList.add('hc-session-menu-right');
+    }
+    // Vertical: flip upward when it would overflow the bottom edge.
+    if (r.bottom + height + MENU_GAP + EDGE > vh) {
+      menu.classList.add('hc-session-menu-flip');
+      const avail = r.top - MENU_GAP - EDGE;
+      if (avail < height) menu.style.maxHeight = Math.max(96, avail) + 'px';
+    } else if (vh - r.bottom - MENU_GAP - EDGE < height) {
+      menu.style.maxHeight = Math.max(96, vh - r.bottom - MENU_GAP - EDGE) + 'px';
+    }
+  };
   document.addEventListener('click', (e) => {
     const target = e.target && e.target.closest ? e.target : null;
     const picker = target && target.closest ? target.closest('.hc-session-picker') : null;
@@ -6575,6 +6610,7 @@ if (typeof document !== 'undefined') {
       if (!open && menu) {
         menu.hidden = false;
         trigger.setAttribute('aria-expanded', 'true');
+        positionSessionMenu(picker, menu);
       }
       return;
     }
@@ -6637,7 +6673,10 @@ if (typeof document !== 'undefined') {
  *  live in state.helperQuestions while pending and vanish on resolve/expiry. */
 function helperQuestionPanelHtml() {
   if (!isOwner() || !isHelperDm()) return '';
-  const records = Object.values(state.helperQuestions || {}).filter((r) => !r.convId || r.convId === state.convId);
+  const now = Date.now();
+  const records = Object.values(state.helperQuestions || {})
+    .filter((r) => !r.convId || r.convId === state.convId)
+    .filter((r) => !(r.expiresAtMs && r.expiresAtMs <= now));
   if (!records.length) return '';
   const cards = records.map((rec) => (Array.isArray(rec.questions) ? rec.questions : []).map((q) => {
     const key = `${rec.recordId}:${q.questionId}`;

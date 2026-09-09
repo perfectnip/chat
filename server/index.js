@@ -1547,6 +1547,7 @@ function registerBridgeSocket(socket) {
       })).filter((o) => o.label) : [],
     })).filter((q) => q.questionId && q.question);
     if (!questions.length) return;
+    if (Number.isFinite(p?.expiresAtMs) && p.expiresAtMs <= Date.now()) return;
     const payload = {
       convId,
       recordId,
@@ -3827,6 +3828,10 @@ io.on('connection', (socket) => {
   // for the helper DM (the bridge pushes live updates after this).
   if (socket.userId === OPENCLAW_OWNER_ID) {
     const ownerConv = getHelperDmConvId();
+    const now = Date.now();
+    for (const [rid, q] of pendingQuestions) {
+      if (q.expiresAtMs && q.expiresAtMs <= now) pendingQuestions.delete(rid);
+    }
     const list = [...pendingQuestions.values()].filter((q) => q.convId === ownerConv);
     if (list.length) socket.emit('helper:question:list', { convId: ownerConv, questions: list });
   }

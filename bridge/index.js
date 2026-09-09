@@ -1155,11 +1155,18 @@ socket.on('helper:answer', async (p) => {
     log('question resolved:', recordId, questionId, values.join(' | '));
   } catch (err) {
     log('question resolve failed:', err.message);
+    const msg = String(err.message || '');
+    // Dead record (timed out / cancelled on the gateway): purge it everywhere
+    // so the server map and the owner's panel drop the stale question.
+    if (/not found|cancelled|expired/i.test(msg)) {
+      pendingQuestions.delete(recordId);
+      socket.emit('helper:question:resolved', { convId: dmConvId, recordId, status: 'expired' });
+    }
     socket.emit('helper:question:resolve-failed', {
       convId: dmConvId,
       recordId,
       questionId,
-      error: String(err.message).slice(0, 120),
+      error: msg.slice(0, 120),
     });
   }
 });
