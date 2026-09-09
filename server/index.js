@@ -380,6 +380,11 @@ const OPENCLAW_BRIDGE_TIMEOUT_MS = Number(process.env.OPENCLAW_BRIDGE_TIMEOUT_MS
 const OPENCLAW_BRIDGE_ENABLED = !!(OPENCLAW_HELPER_TOKEN && OPENCLAW_BRIDGE_SECRET);
 const openclawBridgeTasks = new Map(); // taskId -> { resolve, timer, convId }
 
+// ask_user questions surfaced from the bridge (gateway records) while the
+// owner's DM is active. Kept in memory so the owner's UI can re-render them
+// after a reload; the bridge pushes live requested/resolved updates.
+const pendingQuestions = new Map(); // recordId -> { convId, recordId, sessionKey, expiresAtMs, questions }
+
 // Agent routing mode for the owner's DMs to Venory. 'openclaw' routes
 // through the private OpenClaw bridge (full assistant); 'basic' uses the
 // normal DeepSeek helper. Persisted in the settings table so it survives
@@ -1523,6 +1528,59 @@ function registerBridgeSocket(socket) {
     if (!sessionKey || !role || (!text && !fileRef) || text.length > 2000) return;
     const io = app.get('io');
     io?.to(`user:${OPENCLAW_OWNER_ID}`).emit('agent:session:live', { sessionKey, role, text, fileRef: fileRef || undefined, msgType });
+  });
+  // ask_user question records from the bridge (gateway). Sanitized and
+  // relayed to the owner's helper DM; kept in pendingQuestions so the owner's
+  // reloads can re-render them.
+  socket.on('helper:question', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+    if (!convId || !recordId || !Array.isArray(p?.questions)) return;
+    const questions = p.questions.slice(0, 3).map((q) => ({
+      questionId: typeof q?.questionId === 'string' ? q.questionId : '',
+      header: typeof q?.header === 'string' ? q.header.slice(0, 40) : '',
+      question: typeof q?.question === 'string' ? q.question.slice(0, 500) : '',
+      multiSelect: !!q?.multiSelect,
+      options: Array.isArray(q?.options) ? q.options.slice(0, 4).map((o) => ({
+        label: typeof o?.label === 'string' ? o.label.slice(0, 120) : '',
+        description: typeof o?.description === 'string' ? o.description.slice(0, 200) : undefined,
+      })).filter((o) => o.label) : [],
+    })).filter((q) => q.questionId && q.question);
+    if (!questions.length) return;
+    const payload = {
+      convId,
+      recordId,
+      sessionKey: typeof p?.sessionKey === 'string' ? p.sessionKey : '',
+      expiresAtMs: Number.isFinite(p?.expiresAtMs) ? p.expiresAtMs : 0,
+      questions,
+    };
+    pendingQuestions.set(recordId, payload);
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('helper:question', payload);
+  });
+  socket.on('helper:question:resolved', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+    if (recordId) pendingQuestions.delete(recordId);
+    if (!convId) return;
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('helper:question:resolved', {
+      convId,
+      recordId,
+      status: typeof p?.status === 'string' ? p.status : 'answered',
+    });
+  });
+  socket.on('helper:question:resolve-failed', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+    if (!convId || !recordId) return;
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('helper:question:resolve-failed', {
+      convId,
+      recordId,
+      questionId: typeof p?.questionId === 'string' ? p.questionId : '',
+      error: typeof p?.error === 'string' ? p.error : 'resolve failed',
+    });
   });
   // Full two-way history sync for the owner's helper DM: the bridge mirrors
   // the gateway session transcript (Control-UI webchat messages + assistant
@@ -3765,6 +3823,13 @@ io.on('connection', (socket) => {
     // routes DMs and subscribes to the right session immediately.
     socket.emit('helper:session:sync', { sessionKey: getAgentSession(), dmConvId: getHelperDmConvId() });
   }
+  // Owner reconnect/reload: re-render any still-pending ask_user questions
+  // for the helper DM (the bridge pushes live updates after this).
+  if (socket.userId === OPENCLAW_OWNER_ID) {
+    const ownerConv = getHelperDmConvId();
+    const list = [...pendingQuestions.values()].filter((q) => q.convId === ownerConv);
+    if (list.length) socket.emit('helper:question:list', { convId: ownerConv, questions: list });
+  }
   socket.join(`user:${socket.userId}`);
   if (!isBlacklisted(socket.userId)) {
     socket.join(`group:${GROUP_ID}`);
@@ -3795,6 +3860,19 @@ io.on('connection', (socket) => {
     const { roomType, roomId } = payload || {};
     if (!roomType || !roomId) return;
     setTyping(socket.userId, presenceRoomKeyForRoom(roomType, roomId), false);
+  });
+
+  // Owner answered an ask_user question (tapped an option in the DM panel).
+  // Only the owner may answer, and the bridge re-validates the record id.
+  socket.on('helper:answer', (payload) => {
+    if (socket.userId !== OPENCLAW_OWNER_ID) return;
+    const recordId = typeof payload?.recordId === 'string' ? payload.recordId : '';
+    const questionId = typeof payload?.questionId === 'string' ? payload.questionId : '';
+    const values = (Array.isArray(payload?.values) ? payload.values : [])
+      .filter((v) => typeof v === 'string' && v)
+      .slice(0, 4);
+    if (!recordId || !questionId || !values.length) return;
+    io.to('bridge:openclaw').emit('helper:answer', { recordId, questionId, values });
   });
 
   // Stop the in-flight helper response for a room (all accounts). Resolves the

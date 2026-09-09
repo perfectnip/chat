@@ -7835,3 +7835,99 @@ input[type="checkbox"]:checked::after {
     border-left: 3px solid #8b5cf6;
   }
 }
+
+/* ask_user question panel (owner's helper DM): gateway questions surfaced
+   above the composer as tappable options. Global — desktop + mobile. */
+.helper-question-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.25rem 0.75rem 0.5rem;
+  padding: 0.5rem;
+  background: var(--bg-panel, var(--bg-main));
+  border: 1px solid var(--purple-bright, #a78bfa);
+  border-radius: 10px;
+  max-width: 640px;
+}
+.hq-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--purple-bright, #a78bfa);
+  font-weight: 700;
+}
+.hq-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.hq-head {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.hq-text {
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.hq-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.hq-opt {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: var(--bg-main);
+  color: var(--text);
+  border: var(--border-width) solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-family: inherit;
+  max-width: 100%;
+}
+.hq-opt:hover:not(:disabled) {
+  border-color: var(--purple-bright, #a78bfa);
+}
+.hq-opt.is-selected {
+  border-color: var(--purple-bright, #a78bfa);
+  color: var(--purple-bright, #a78bfa);
+  font-weight: 600;
+}
+.hq-opt:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.hq-opt-desc {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.hq-sendrow {
+  display: flex;
+  gap: 0.4rem;
+}
+.hq-send {
+  background: var(--purple-bright, #a78bfa);
+  color: #0b0714;
+  border: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+.hq-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hq-err {
+  font-size: 0.72rem;
+  color: #f87171;
+}

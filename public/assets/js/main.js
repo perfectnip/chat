@@ -119,6 +119,12 @@ let state = {
   agentBridgeEnabled: true,
   helperRuns: {}, // roomKey -> { busy, working, done, tools: [{id,name,title,status,meta}] }
   sessionRuns: {}, // gateway sessionKey -> { busy, working, done, tools: [...] } (per-session live state)
+  // ask_user questions surfaced from the gateway (rendered as a tappable
+  // panel in the owner's helper DM until answered/expired).
+  helperQuestions: {}, // recordId -> { convId, recordId, sessionKey, expiresAtMs, questions: [...] }
+  helperQuestionSelections: {}, // `${recordId}:${questionId}` -> [labels] (multiSelect)
+  helperQuestionSending: {}, // `${recordId}:${questionId}` -> true while resolving
+  helperQuestionErrors: {}, // `${recordId}:${questionId}` -> error text
 };
 
 if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
@@ -3082,6 +3088,46 @@ function connectSocket() {
     }
     updateHelperUiInPlace(key);
   });
+  // ask_user question records from the bridge (gateway). Rendered as a
+  // tappable panel in the owner's helper DM; answers go back via
+  // helper:answer → bridge → gateway question.resolve.
+  s.on('helper:question', (p) => {
+    if (!isOwner() || !p?.recordId || !Array.isArray(p?.questions)) return;
+    state.helperQuestions[p.recordId] = p;
+    updateHelperQuestionPanel();
+  });
+  // Full pending set (after reload / socket reconnect).
+  s.on('helper:question:list', (p) => {
+    if (!isOwner()) return;
+    state.helperQuestions = {};
+    for (const q of (Array.isArray(p?.questions) ? p.questions : [])) {
+      if (q?.recordId) state.helperQuestions[q.recordId] = q;
+    }
+    updateHelperQuestionPanel();
+  });
+  s.on('helper:question:resolved', (p) => {
+    if (!p?.recordId) return;
+    delete state.helperQuestions[p.recordId];
+    for (const k of Object.keys(state.helperQuestionSelections)) {
+      if (k.startsWith(`${p.recordId}:`)) delete state.helperQuestionSelections[k];
+    }
+    for (const k of Object.keys(state.helperQuestionSending)) {
+      if (k.startsWith(`${p.recordId}:`)) delete state.helperQuestionSending[k];
+    }
+    for (const k of Object.keys(state.helperQuestionErrors)) {
+      if (k.startsWith(`${p.recordId}:`)) delete state.helperQuestionErrors[k];
+    }
+    updateHelperQuestionPanel();
+  });
+  s.on('helper:question:resolve-failed', (p) => {
+    if (!p?.recordId) return;
+    const key = p.questionId ? `${p.recordId}:${p.questionId}` : '';
+    if (key) {
+      state.helperQuestionSending[key] = false;
+      state.helperQuestionErrors[key] = typeof p?.error === 'string' ? p.error : 'resolve failed';
+    }
+    updateHelperQuestionPanel();
+  });
   // OpenClaw session picker: the bridge pushes a fresh list whenever the
   // gateway session index changes, so the owner's picker stays live without
   // a request round-trip.
@@ -4234,6 +4280,7 @@ function render() {
   document.body.classList.remove('auth-page');
   app.innerHTML = renderMain();
   bindMain();
+  updateHelperQuestionPanel();
   if (route.page === 'settings') bindSettings();
   if (state._voiceJoined && state._voiceLocalStream) {
     const localVid = document.getElementById('voice-local-video');
@@ -6538,9 +6585,104 @@ if (typeof document !== 'undefined') {
     if (mode === state.agentMode) return;
     setAgentMode(mode);
   });
+  // ask_user question panel: tappable options + multi-select send.
+  // Delegated so in-place panel refreshes keep working.
+  document.addEventListener('click', (e) => {
+    const t = e.target && e.target.closest ? e.target : null;
+    if (!t) return;
+    const opt = t.closest ? t.closest('[data-hq-record][data-hq-question][data-hq-value]') : null;
+    if (opt) {
+      const rec = state.helperQuestions[opt.dataset.hqRecord];
+      const q = rec && (Array.isArray(rec.questions) ? rec.questions : []).find((x) => x.questionId === opt.dataset.hqQuestion);
+      if (!rec || !q) return;
+      const key = `${rec.recordId}:${q.questionId}`;
+      if (state.helperQuestionSending[key]) return;
+      if (q.multiSelect) {
+        const sel = state.helperQuestionSelections[key] || [];
+        const i = sel.indexOf(opt.dataset.hqValue);
+        if (i >= 0) sel.splice(i, 1);
+        else sel.push(opt.dataset.hqValue);
+        state.helperQuestionSelections[key] = sel;
+        updateHelperQuestionPanel();
+        return;
+      }
+      state.helperQuestionSending[key] = true;
+      state.helperQuestionErrors[key] = '';
+      state.helperQuestionSelections[key] = [opt.dataset.hqValue];
+      updateHelperQuestionPanel();
+      state.socket?.emit('helper:answer', { recordId: rec.recordId, questionId: q.questionId, values: [opt.dataset.hqValue] });
+      return;
+    }
+    const send = t.closest ? t.closest('button.hq-send[data-hq-record][data-hq-question]') : null;
+    if (send) {
+      const rec = state.helperQuestions[send.dataset.hqRecord];
+      const q = rec && (Array.isArray(rec.questions) ? rec.questions : []).find((x) => x.questionId === send.dataset.hqQuestion);
+      if (!rec || !q) return;
+      const key = `${rec.recordId}:${q.questionId}`;
+      const values = (state.helperQuestionSelections[key] || []).slice();
+      if (!values.length || state.helperQuestionSending[key]) return;
+      state.helperQuestionSending[key] = true;
+      state.helperQuestionErrors[key] = '';
+      updateHelperQuestionPanel();
+      state.socket?.emit('helper:answer', { recordId: rec.recordId, questionId: q.questionId, values });
+    }
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeSessionMenus();
   });
+}
+
+/** ask_user question panel (owner's helper DM): renders gateway questions
+ *  as tappable option buttons above the composer. Ephemeral — questions
+ *  live in state.helperQuestions while pending and vanish on resolve/expiry. */
+function helperQuestionPanelHtml() {
+  if (!isOwner() || !isHelperDm()) return '';
+  const records = Object.values(state.helperQuestions || {}).filter((r) => !r.convId || r.convId === state.convId);
+  if (!records.length) return '';
+  const cards = records.map((rec) => (Array.isArray(rec.questions) ? rec.questions : []).map((q) => {
+    const key = `${rec.recordId}:${q.questionId}`;
+    const sel = state.helperQuestionSelections[key] || [];
+    const sending = !!state.helperQuestionSending[key];
+    const err = state.helperQuestionErrors[key] || '';
+    const opts = (Array.isArray(q.options) ? q.options : []).map((o) => {
+      const active = sel.includes(o.label);
+      return `<button type="button" class="hq-opt${active ? ' is-selected' : ''}" data-hq-record="${escapeHtml(rec.recordId)}" data-hq-question="${escapeHtml(q.questionId)}" data-hq-value="${escapeHtml(o.label)}" ${sending ? 'disabled' : ''}>${escapeHtml(o.label)}${o.description ? `<span class="hq-opt-desc">${escapeHtml(o.description)}</span>` : ''}</button>`;
+    }).join('');
+    const sendBtn = q.multiSelect
+      ? `<button type="button" class="hq-send" data-hq-record="${escapeHtml(rec.recordId)}" data-hq-question="${escapeHtml(q.questionId)}" ${!sel.length || sending ? 'disabled' : ''}>${sending ? '…' : 'Send'}</button>`
+      : '';
+    return `<div class="hq-card">
+      ${q.header ? `<div class="hq-head">${escapeHtml(q.header)}</div>` : ''}
+      <div class="hq-text">${escapeHtml(q.question)}</div>
+      <div class="hq-opts">${opts}</div>
+      ${q.multiSelect ? `<div class="hq-sendrow">${sendBtn}</div>` : ''}
+      ${err ? `<div class="hq-err">${escapeHtml(err)}</div>` : ''}
+    </div>`;
+  }).join('')).join('');
+  return `<div class="helper-question-panel" id="helper-question-panel" role="group" aria-label="Question"><div class="hq-title">❓ ${tx('question', 'Question')}</div>${cards}</div>`;
+}
+
+/** Insert/refresh/remove the question panel in the current DM view. Called
+ *  after every render() and on live question events. */
+function updateHelperQuestionPanel() {
+  const panel = document.getElementById('helper-question-panel');
+  if (!isOwner() || !isHelperDm()) {
+    if (panel) panel.remove();
+    return;
+  }
+  const chatMain = document.querySelector('.chat-main');
+  if (!chatMain) return;
+  const html = helperQuestionPanelHtml();
+  if (!html) {
+    if (panel) panel.remove();
+    return;
+  }
+  if (panel) {
+    panel.outerHTML = html;
+  } else {
+    const wrap = chatMain.querySelector('.messages-wrap');
+    if (wrap) wrap.insertAdjacentHTML('afterend', html);
+  }
 }
 
 function renderChatArea() {

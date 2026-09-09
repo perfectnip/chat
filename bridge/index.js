@@ -202,7 +202,7 @@ function handleGatewayMessage(raw) {
   try { m = JSON.parse(raw.toString()); } catch { return; }
   if (m.event === 'connect.challenge') {
     const nonce = m.payload?.nonce || '';
-    const scopes = ['operator.read', 'operator.write', 'operator.admin', 'operator.approvals'];
+    const scopes = ['operator.read', 'operator.write', 'operator.admin', 'operator.approvals', 'operator.questions'];
     gw.send(JSON.stringify({
       type: 'req',
       id: 'gw-connect',
@@ -231,6 +231,15 @@ function handleGatewayMessage(raw) {
       gwRpc('sessions.subscribe', {}, 8000)
         .then(() => log('subscribed to gateway session index changes'))
         .catch((err) => log('sessions.subscribe failed:', err.message));
+      // Recover ask_user questions that were pending while we were offline
+      // (bridge restart mid-run must not strand the owner's question UI).
+      gwRpc('question.list', {}, 8000)
+        .then((res) => {
+          const qs = Array.isArray(res?.questions) ? res.questions : [];
+          for (const record of qs) handleGatewayQuestion(record);
+          if (qs.length) log('recovered pending questions:', qs.length);
+        })
+        .catch((err) => log('question.list failed:', err.message));
       scheduleListPush();
     } else {
       log('gateway ws connect rejected:', JSON.stringify(m.error || m).slice(0, 300));
@@ -243,6 +252,10 @@ function handleGatewayMessage(raw) {
     handleSessionMessage(m.payload);
   } else if (m.event === 'agent') {
     handleAgentEvent(m.payload);
+  } else if (m.event === 'question.requested') {
+    handleGatewayQuestion(m.payload);
+  } else if (m.event === 'question.resolved') {
+    handleGatewayQuestionResolved(m.payload);
   }
 }
 
@@ -251,6 +264,60 @@ function handleGatewayMessage(raw) {
 function convIdFromSessionKey(sessionKey) {
   const m = String(sessionKey || '').match(/^agent:main:openai-user:jchat:dm:(.+)$/);
   return m ? m[1] : null;
+}
+
+// --- gateway ask_user questions → jchat UI -----------------------------------
+// When the agent calls ask_user mid-run, the gateway broadcasts the question
+// record on the WS; we surface it in the owner's DM as tappable options and
+// resolve it back over the WS when the owner answers. Records that were
+// pending while the bridge was offline are recovered via question.list.
+const pendingQuestions = new Map(); // recordId -> { record, convId }
+
+function questionPayload(record, convId) {
+  return {
+    convId,
+    recordId: record.id,
+    sessionKey: typeof record.sessionKey === 'string' ? record.sessionKey : '',
+    expiresAtMs: typeof record.expiresAtMs === 'number' ? record.expiresAtMs : 0,
+    questions: (Array.isArray(record.questions) ? record.questions : []).map((q) => ({
+      questionId: String(q?.questionId || q?.id || ''),
+      header: typeof q?.header === 'string' ? q.header : '',
+      question: typeof q?.question === 'string' ? q.question : '',
+      multiSelect: !!q?.multiSelect,
+      options: (Array.isArray(q?.options) ? q.options : []).map((o) => ({
+        label: typeof o?.label === 'string' ? o.label : '',
+        description: typeof o?.description === 'string' ? o.description : undefined,
+      })).filter((o) => o.label),
+    })).filter((q) => q.questionId && q.question),
+  };
+}
+
+function handleGatewayQuestion(record) {
+  if (!record || record.status !== 'pending' || record.id === undefined) return;
+  const sk = typeof record.sessionKey === 'string' ? record.sessionKey : '';
+  // Only questions on owner-bridge sessions: the DM lane itself or the
+  // currently routed session. Questions from other agents stay out.
+  const isDmQuestion = !!convIdFromSessionKey(sk);
+  const isRoutedQuestion = !!currentSessionKey && sk === currentSessionKey;
+  if (!isDmQuestion && !isRoutedQuestion) return;
+  const convId = convIdFromSessionKey(sk) || dmConvId;
+  if (!convId) return;
+  const payload = questionPayload(record, convId);
+  if (!payload.questions.length) return;
+  pendingQuestions.set(record.id, { record, convId });
+  socket.emit('helper:question', payload);
+  log('question surfaced:', record.id, sk);
+}
+
+function handleGatewayQuestionResolved(ev) {
+  if (!ev?.id) return;
+  const entry = pendingQuestions.get(ev.id);
+  if (entry) pendingQuestions.delete(ev.id);
+  socket.emit('helper:question:resolved', {
+    convId: entry?.convId || dmConvId,
+    recordId: ev.id,
+    status: typeof ev.status === 'string' ? ev.status : 'answered',
+  });
 }
 
 function handleAgentEvent(p) {
@@ -1069,6 +1136,33 @@ socket.on('helper:sessions:history', async (p) => {
 // Server pushes the persisted session selection (on bridge connect and on
 // change) so routing + relay subscriptions stay in sync.
 socket.on('helper:session:sync', (p) => applySessionSync(p));
+
+// Owner answered an ask_user question in the DM → resolve it on the gateway.
+socket.on('helper:answer', async (p) => {
+  const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+  const questionId = typeof p?.questionId === 'string' ? p.questionId : '';
+  const values = (Array.isArray(p?.values) ? p.values : [])
+    .filter((v) => typeof v === 'string' && v)
+    .slice(0, 4);
+  if (!/^ask_[a-f0-9]{32}$/.test(recordId) || !questionId || !values.length) return;
+  try {
+    await gwRpc('question.resolve', {
+      id: recordId,
+      answers: { answers: { [questionId]: values } },
+      resolvedBy: 'jimmyqrg',
+    }, 8000);
+    pendingQuestions.delete(recordId);
+    log('question resolved:', recordId, questionId, values.join(' | '));
+  } catch (err) {
+    log('question resolve failed:', err.message);
+    socket.emit('helper:question:resolve-failed', {
+      convId: dmConvId,
+      recordId,
+      questionId,
+      error: String(err.message).slice(0, 120),
+    });
+  }
+});
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
