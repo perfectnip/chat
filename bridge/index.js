@@ -652,6 +652,7 @@ async function buildSessionList() {
         // Content size for the control-bar badge (updates when switching).
         totalTokens: typeof s.totalTokens === 'number' ? s.totalTokens : 0,
         contextTokens: typeof s.contextTokens === 'number' ? s.contextTokens : 0,
+        contextTokenBudget: typeof s.contextBudgetStatus?.contextTokenBudget === 'number' ? s.contextBudgetStatus.contextTokenBudget : 0,
       };
     })
     .sort((a, b) => b.updatedAt - a.updatedAt)

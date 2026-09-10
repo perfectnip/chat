@@ -6179,8 +6179,10 @@ function sessionSizeInfo() {
     : list.find((x) => x.isDm);
   const total = typeof s?.totalTokens === 'number' ? s.totalTokens : 0;
   const ctx = typeof s?.contextTokens === 'number' && s.contextTokens > 0 ? s.contextTokens : 0;
+  const budget = typeof s?.contextTokenBudget === 'number' && s.contextTokenBudget > 0 ? s.contextTokenBudget : 0;
+  const limit = budget || ctx; // OpenClaw style: total / context budget
   const label = state.agentSession ? sessionLabelForKey(state.agentSession) : 'This DM (jchat)';
-  return { total, ctx, label };
+  return { total, ctx, budget, limit, label };
 }
 
 /** Gateway session key the Compact button should target. */
@@ -6584,9 +6586,11 @@ function renderHelperControlBar() {
   // Content size + Compact for the currently viewed session (updates when
   // switching via the picker — updateHelperUiInPlace re-renders this bar).
   const size = sessionSizeInfo();
-  const sizeText = size.total ? fmtTokens(size.total) : '';
-  const sizeTitle = `${size.label} — content size ${size.total ? size.total.toLocaleString('en-US') + ' tokens' : 'unknown'}${size.ctx ? ` · context window ${size.ctx.toLocaleString('en-US')}` : ''}`;
-  const sizeBadge = `<span class="hc-size-badge" id="helper-size-badge" title="${escapeHtml(sizeTitle)}">${sizeText ? sizeText + ' tok' : '—'}</span>`;
+  const sizeText = size.total ? (size.limit
+    ? `${fmtTokens(size.total)}/${fmtTokens(size.limit)} (${Math.round((size.total / size.limit) * 100)}%)`
+    : fmtTokens(size.total) + ' tok') : '';
+  const sizeTitle = `${size.label} — content size ${size.total ? size.total.toLocaleString('en-US') + ' tokens' : 'unknown'}${size.limit ? ` of ${size.limit.toLocaleString('en-US')} budget` : ''}${size.ctx ? ` · context window ${size.ctx.toLocaleString('en-US')}` : ''}`;
+  const sizeBadge = `<span class="hc-size-badge" id="helper-size-badge" title="${escapeHtml(sizeTitle)}">${sizeText || '—'}</span>`;
   const compactBtn = mode === 'openclaw'
     ? `<button type="button" class="hc-compact-btn${state.helperCompacting ? ' is-busy' : ''}" id="helper-compact-btn" title="Compact the session context">${state.helperCompacting ? 'Compacting…' : 'Compact'}</button>`
     : '';
@@ -7548,6 +7552,7 @@ function renderMessageContentInner(raw) {
 /** Render Markdown to safe HTML (no raw HTML execution). Supports # headers, **bold**, *italic*, `code`, > blockquote, -, * lists, ``` blocks, [links](url). */
 function markdownToHtml(md) {
   if (md == null || md === '') return '';
+  const mathTokens = [];
   const lines = String(md).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   const out = [];
   let inBlock = false;
@@ -7649,7 +7654,26 @@ function markdownToHtml(md) {
 
   function inlineMarkdown(s) {
     const escaped = escapeHtml(s);
-    const withMarkdown = escaped
+    // Dollar math ($...$ / $$...$$) → KaTeX, protected from the inline
+    // markdown pass via tokens (so **bold** can span math, and invalid
+    // TeX like "$5 and $10" stays literal text).
+    let tokenized = escaped;
+    if (typeof window.renderKatex === 'function') {
+      tokenized = escaped.replace(/(\$\$[^$]+\$\$|\$[^$\n]+\$)/g, (m) => {
+        const display = m.startsWith('$$');
+        const body = display ? m.slice(2, -2) : m.slice(1, -1);
+        // Skip money/plain-dollar text: only treat as math when it carries
+        // math syntax (\, ^, _, {}, =, <, >, +, -, *, /).
+        if (!/[\\^_{}=<>+\-*/]/.test(body)) return m;
+        try {
+          const html = window.renderKatex(body, display);
+          if (html.includes('katex-error')) return m;
+          mathTokens.push(html);
+          return '\u0000M' + (mathTokens.length - 1) + '\u0000';
+        } catch (_) { return m; }
+      });
+    }
+    const withMarkdown = tokenized
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/__(.+?)__/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
@@ -7672,19 +7696,28 @@ function markdownToHtml(md) {
         parts[i] = linkifyPlainText(part);
       }
     }
-    return parts.join('');
+    let result = parts.join('');
+    if (mathTokens.length) {
+      result = result.replace(/\u0000M(\d+)\u0000/g, (_, i) => mathTokens[+i] || '');
+    }
+    return result;
   }
 
   function flushTable() {
     if (!tableRows.length) return;
+    // A lone pipe line without a separator row isn't a real table — render
+    // it as normal text (e.g. shell pipes like "cat x | grep y").
+    if (tableRows.length === 1) {
+      out.push(`<p>${inlineMarkdown(tableRows[0])}</p>`);
+      tableRows = [];
+      return;
+    }
     const headerRow = tableRows[0];
     const sepRow = tableRows.length > 1 ? tableRows[1] : '';
-    const tbody = tableRows.slice(2);
+    const bodyRows = tableRows.slice(2);
 
-    // Parse header cells
-    const headers = parseTableCells(headerRow).map(c => `<th>${c.trim()}</th>`).join('');
+    const headers = parseTableCells(headerRow).map(c => `<th>${inlineMarkdown(c.trim())}</th>`).join('');
 
-    // Parse separator to determine alignment
     let alignAttrs = '';
     if (sepRow) {
       const cells = parseTableCells(sepRow);
@@ -7696,9 +7729,8 @@ function markdownToHtml(md) {
       }).join('');
     }
 
-    // Parse body rows
-    const rowsHtml = tbody.map(row => {
-      const cells = parseTableCells(row).map(c => `<td${alignAttrs}>${c.trim()}</td>`).join('');
+    const rowsHtml = bodyRows.map(row => {
+      const cells = parseTableCells(row).map(c => `<td${alignAttrs}>${inlineMarkdown(c.trim())}</td>`).join('');
       return `<tr>${cells}</tr>`;
     }).join('');
 
@@ -7711,17 +7743,6 @@ function markdownToHtml(md) {
     return row.split('|').map(c => c.trim()).filter(c => c !== '');
   }
 
-  function isTableRow(line) {
-    const cells = line.split('|').map(c => c.trim()).filter(c => c !== '');
-    if (cells.length < 2) return false;
-    // Second row (separator) must contain only -, :, and spaces
-    if (tableRows.length === 1) {
-      const sep = cells.join('');
-      return /^[-\s:]+$/.test(sep);
-    }
-    return true;
-  }
-
   let tableRows = [];
 
   for (let i = 0; i < lines.length; i++) {
@@ -7730,6 +7751,7 @@ function markdownToHtml(md) {
     if (trimmed.startsWith('```')) {
       flushBlockquote();
       flushList();
+      flushTable();
       if (inBlock) {
         flushBlock();
       } else {
@@ -7752,17 +7774,30 @@ function markdownToHtml(md) {
       blockquoteLines.push(blockquoteMatch[1]);
       continue;
     }
-    // Table detection: a line with | separated cells
-    const tableCells = trimmed.split('|').map(c => c.trim()).filter(c => c !== '');
-    const isTable = tableCells.length >= 2 && tableCells.every(c => !/^[-:]+$/.test(c) || /^[:\-]+$/.test(c.trim()));
-    const isSepRow = tableCells.length >= 2 && /^[:\|\-\s]+$/.test(tableCells.join(''));
-    if (tableCells.length >= 2 && (tableRows.length === 0 || isSepRow || /^[^\|]+$/.test(trimmed))) {
-      flushList();
-      flushBlockquote();
-      tableRows.push(trimmed);
-      continue;
-    }
-    if (tableRows.length > 0 && !isTable) {
+    // Table handling (GFM-style): a pipe line only starts a table when the
+    // NEXT line is a separator row; sep/data rows extend it; any non-pipe
+    // line ends it. Prevents shell pipes and "a | b" text from becoming
+    // tables, and keeps body rows in the table.
+    const pipeCells = (l) => l.split('|').map((c) => c.trim()).filter((c) => c !== '');
+    const cells = pipeCells(trimmed);
+    if (tableRows.length === 0) {
+      if (cells.length >= 2) {
+        const next = i + 1 < lines.length ? lines[i + 1].trimEnd() : '';
+        const nextCells = pipeCells(next);
+        const nextIsSep = nextCells.length >= 2 && /^[:\|\-\s]+$/.test(nextCells.join(''));
+        if (nextIsSep) {
+          flushList();
+          flushBlockquote();
+          tableRows.push(trimmed);
+          continue;
+        }
+      }
+      // Not a table: fall through to normal rendering.
+    } else {
+      if (cells.length >= 2) {
+        tableRows.push(trimmed);
+        continue;
+      }
       flushTable();
     }
     const olMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);

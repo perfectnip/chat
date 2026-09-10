@@ -7,13 +7,29 @@ import { recordAuditLog } from '../audit.js';
 const router = Router();
 const EDITABLE_DOCS = ['problem_solving', 'rules', 'announcements'];
 
-const PORTAL_ANNOUNCEMENT_URL = process.env.SYNC_KEY
-  ? 'https://deepseek-proxy.ikunbeautiful.workers.dev/v1/portal-announcements'
-  : 'https://perfectnip.github.io/?directly=1';
+// Announcements are grepped straight from the portal site. Formerly the
+// sync went through the deepseek-proxy worker when SYNC_KEY was set, but
+// that worker hits Cloudflare plan rate limits (error 1027) and serves an
+// error page — the grep then finds nothing. Fetch the (new) domain directly:
+// perfectnip.github.io (moved from indiamonda.github.io).
+const PORTAL_ANNOUNCEMENT_URL = 'https://perfectnip.github.io/?directly=1';
 
 /** Grep: check if portal HTML contains the announcement sections. */
 function portalHasAnnouncementContent(html) {
   return /Latest updates:\s*<\/p>[\s\S]*?<ul[^>]*>|History:?\s*<\/p>[\s\S]*?<ul[^>]*>/i.test(html);
+}
+
+/** Decode common HTML entities left over after tag stripping. */
+function decodeEntities(s) {
+  return s
+    .replace(/&mdash;/gi, '\u2014')
+    .replace(/&ndash;/gi, '\u2013')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&nbsp;/gi, ' ');
 }
 
 /** Parse "Latest updates" and "History" list items from portal announcement HTML. Returns array of item strings (e.g. "Added Stickman Arena"). */
@@ -22,12 +38,12 @@ function parsePortalAnnouncementItems(html) {
   const latestMatch = html.match(/Latest updates:\s*<\/p>[\s\S]*?<ul[^>]*>([\s\S]*?)<\/ul>/i);
   if (latestMatch) {
     const lis = latestMatch[1].match(/<li>([\s\S]*?)<\/li>/g) || [];
-    lis.forEach(li => items.push(li.replace(/<\/?li>/g, '').replace(/<[^>]+>/g, '').trim()));
+    lis.forEach(li => items.push(decodeEntities(li.replace(/<\/?li>/g, '').replace(/<[^>]+>/g, '').trim())));
   }
   const historyMatch = html.match(/History:?\s*<\/p>[\s\S]*?<ul[^>]*>([\s\S]*?)<\/ul>/i);
   if (historyMatch) {
     const lis = historyMatch[1].match(/<li>([\s\S]*?)<\/li>/g) || [];
-    lis.forEach(li => items.push(li.replace(/<\/?li>/g, '').replace(/<b>|<\/b>/gi, '**').replace(/<[^>]+>/g, '').trim()));
+    lis.forEach(li => items.push(decodeEntities(li.replace(/<\/?li>/g, '').replace(/<b>|<\/b>/gi, '**').replace(/<[^>]+>/g, '').trim())));
   }
   return items.filter(Boolean);
 }
@@ -82,7 +98,6 @@ export async function syncAnnouncementsFromPortal(editorId = 'system') {
   const effectiveEditor = (editorId && typeof editorId === 'string' && editorId !== 'system') ? editorId : SYSTEM_EDITOR;
 
   const headers = { 'User-Agent': 'JimmyQrg-Chat-Sync/1' };
-  if (process.env.SYNC_KEY) headers['X-Sync-Key'] = process.env.SYNC_KEY;
   const resp = await fetch(PORTAL_ANNOUNCEMENT_URL, { headers });
   const html = await resp.text();
   if (!portalHasAnnouncementContent(html)) return { synced: false, reason: 'no_portal_content' };
