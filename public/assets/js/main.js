@@ -125,6 +125,7 @@ let state = {
   helperQuestionSelections: {}, // `${recordId}:${questionId}` -> [labels] (multiSelect)
   helperQuestionSending: {}, // `${recordId}:${questionId}` -> true while resolving
   helperQuestionErrors: {}, // `${recordId}:${questionId}` -> error text
+  helperCompacting: false, // Compact button busy state (sessions.compact in flight)
 };
 
 if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
@@ -3186,6 +3187,16 @@ function connectSocket() {
     }
     updateHelperQuestionPanel();
   });
+  // Compact result for the control-bar Compact button.
+  s.on('helper:compact:result', (p) => {
+    state.helperCompacting = false;
+    updateHelperUiInPlace();
+    if (p?.ok) {
+      showToast(p.message || 'Session compacted', 'success');
+    } else {
+      showToast(p?.error || 'Compact failed', 'error');
+    }
+  });
   // OpenClaw session picker: the bridge pushes a fresh list whenever the
   // gateway session index changes, so the owner's picker stays live without
   // a request round-trip.
@@ -6151,6 +6162,35 @@ function sessionLabelForKey(key) {
   return base.length > 28 ? `${base.slice(0, 25)}…` : base;
 }
 
+/** Compact token formatting for the control-bar size badge: 264618 → 264.6k. */
+function fmtTokens(n) {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** Size info for the currently viewed agent session (picker selection, or
+ *  the owner's own DM when nothing is selected). */
+function sessionSizeInfo() {
+  const list = state.agentSessions || [];
+  const s = state.agentSession
+    ? list.find((x) => x.key === state.agentSession)
+    : list.find((x) => x.isDm);
+  const total = typeof s?.totalTokens === 'number' ? s.totalTokens : 0;
+  const ctx = typeof s?.contextTokens === 'number' && s.contextTokens > 0 ? s.contextTokens : 0;
+  const label = state.agentSession ? sessionLabelForKey(state.agentSession) : 'This DM (jchat)';
+  return { total, ctx, label };
+}
+
+/** Gateway session key the Compact button should target. */
+function currentAgentSessionKey() {
+  if (state.agentSession) return state.agentSession;
+  const dm = (state.agentSessions || []).find((x) => x.isDm);
+  if (dm?.key) return dm.key;
+  return `agent:main:openai-user:jchat:dm:${state.convId || ''}`;
+}
+
 /** The gateway session key of the owner's own DM (the jchat conversation).
  *  It's the default "This DM (jchat)" target — shown as the DM view, not a
  *  separate session view. */
@@ -6522,7 +6562,7 @@ function renderHelperControlBar() {
           </span>
         </span>`;
   const openclawRow = mode === 'openclaw' ? `
-      <div class="hc-row">
+      <div class="hc-row hc-row-detail">
         <label class="hc-label">Model
           <select id="agent-model-select" class="hc-select">${modelOptions}</select>
         </label>
@@ -6541,6 +6581,15 @@ function renderHelperControlBar() {
   const bridgeBadge = state.agentBridgeEnabled
     ? `<span class="hc-bridge ${bridgeOnline ? '' : 'hc-bridge-off'}" id="helper-bridge-badge">${bridgeOnline ? 'bridge online' : 'bridge offline'}</span>`
     : '';
+  // Content size + Compact for the currently viewed session (updates when
+  // switching via the picker — updateHelperUiInPlace re-renders this bar).
+  const size = sessionSizeInfo();
+  const sizeText = size.total ? fmtTokens(size.total) : '';
+  const sizeTitle = `${size.label} — content size ${size.total ? size.total.toLocaleString('en-US') + ' tokens' : 'unknown'}${size.ctx ? ` · context window ${size.ctx.toLocaleString('en-US')}` : ''}`;
+  const sizeBadge = `<span class="hc-size-badge" id="helper-size-badge" title="${escapeHtml(sizeTitle)}">${sizeText ? sizeText + ' tok' : '—'}</span>`;
+  const compactBtn = mode === 'openclaw'
+    ? `<button type="button" class="hc-compact-btn${state.helperCompacting ? ' is-busy' : ''}" id="helper-compact-btn" title="Compact the session context">${state.helperCompacting ? 'Compacting…' : 'Compact'}</button>`
+    : '';
 
   return `
     <div class="helper-control-bar" id="helper-control-bar">
@@ -6551,6 +6600,8 @@ function renderHelperControlBar() {
           <button type="button" class="hc-mode-opt ${mode === 'basic' ? 'is-active' : ''}" data-mode="basic">basic</button>
         </div>
         ${bridgeBadge}
+        ${sizeBadge}
+        ${compactBtn}
       </div>${openclawRow}
     </div>
   `;
@@ -6704,6 +6755,18 @@ if (typeof document !== 'undefined') {
     const mode = modeOpt.dataset.mode;
     if (mode === state.agentMode) return;
     setAgentMode(mode);
+  });
+  // Compact button on the helper control bar → gateway sessions.compact for
+  // the currently viewed session. Result toast via helper:compact:result.
+  document.addEventListener('click', (e) => {
+    const t = e.target && e.target.closest ? e.target : null;
+    const btn = t && t.closest ? t.closest('#helper-compact-btn') : null;
+    if (!btn || state.helperCompacting || state.agentMode !== 'openclaw') return;
+    const key = currentAgentSessionKey();
+    if (!key) return;
+    state.helperCompacting = true;
+    updateHelperUiInPlace();
+    state.socket?.emit('helper:compact', { sessionKey: key });
   });
   // ask_user question panel: tappable options + multi-select send.
   // Delegated so in-place panel refreshes keep working.

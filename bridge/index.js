@@ -649,6 +649,9 @@ async function buildSessionList() {
         status: s.status || (s.hasActiveRun ? 'running' : 'done'),
         hasActiveRun: !!s.hasActiveRun,
         model: typeof s.model === 'string' ? s.model : '',
+        // Content size for the control-bar badge (updates when switching).
+        totalTokens: typeof s.totalTokens === 'number' ? s.totalTokens : 0,
+        contextTokens: typeof s.contextTokens === 'number' ? s.contextTokens : 0,
       };
     })
     .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -1136,6 +1139,32 @@ socket.on('helper:sessions:history', async (p) => {
 // Server pushes the persisted session selection (on bridge connect and on
 // change) so routing + relay subscriptions stay in sync.
 socket.on('helper:session:sync', (p) => applySessionSync(p));
+
+// Owner tapped Compact on the control bar → compact that session on the
+// gateway (sessions.compact). Compaction may be refused while a run is
+// active; surface the gateway's reason either way.
+socket.on('helper:compact', async (p) => {
+  const key = typeof p?.sessionKey === 'string' && p.sessionKey ? p.sessionKey : '';
+  if (!key) return;
+  try {
+    const res = await gwRpc('sessions.compact', { key }, 60000);
+    const compacted = !!res?.compacted;
+    const reason = !compacted && typeof res?.reason === 'string' ? res.reason : '';
+    const message = compacted
+      ? 'Session compacted'
+      : (reason ? `Nothing to compact: ${reason}` : 'Nothing to compact');
+    socket.emit('helper:compact:result', { convId: dmConvId, sessionKey: key, ok: true, compacted, message });
+    scheduleListPush();
+  } catch (err) {
+    log('compact failed:', err.message);
+    socket.emit('helper:compact:result', {
+      convId: dmConvId,
+      sessionKey: key,
+      ok: false,
+      error: String(err.message).slice(0, 200),
+    });
+  }
+});
 
 // Owner answered an ask_user question in the DM → resolve it on the gateway.
 socket.on('helper:answer', async (p) => {

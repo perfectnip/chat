@@ -3520,6 +3520,39 @@ select:focus {
 .hc-status-done { color: #34d399; }
 .hc-status-done .hc-status-dot { background: #34d399; }
 .hc-status-idle { color: var(--text-muted); }
+/* Content size badge + Compact button (control bar, top row) */
+.hc-size-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-main);
+  border: var(--border-width) solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  white-space: nowrap;
+}
+.hc-compact-btn {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--purple-bright, #a78bfa);
+  background: transparent;
+  color: var(--purple-bright, #a78bfa);
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.hc-compact-btn:hover:not(.is-busy) {
+  background: rgba(139, 92, 246, 0.12);
+}
+.hc-compact-btn.is-busy {
+  opacity: 0.6;
+  cursor: default;
+}
 /* Venory mode switch (OpenClaw ↔ basic) — segmented control */
 .hc-mode-toggle {
   display: inline-flex;

@@ -11,6 +11,7 @@ import bcrypt from 'bcryptjs';
 import { sessionMiddleware, touchSession, getCurrentUser, requireAuth, canRecallOrEdit, canSendInbox, canBroadcast, canEditDocs, canKick, canDeleteMessages, canTimeout, canUnlimitedEditRecall, canSeeWhispers, tokenAuthMiddleware } from './auth.js';
 import { db, GROUP_ID, PANELS, HELPER_USER_ID, isBlacklisted, isUserDeleted, canSeePrivateUser, PRIVATE_USER_BLOCKED, whisperVisibleClause } from './db.js';
 import { moderateMessage } from './ai-moderation.js';
+import { deepseekFetch } from './deepseek-client.js';
 import { upload } from './upload.js';
 import { getUploadUrl, getFileRef, ensurePlayableVideo } from './upload.js';
 import authRoutes from './routes/auth.js';
@@ -1361,23 +1362,31 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
     let reply = '';
     for (let attempt = 0; attempt < 3; attempt++) {
       if (controller.signal.aborted) break;
-      const resp = await fetch(DEEPSEEK_API, {
-        method: 'POST',
+      // deepseekFetch retries transient failures (429 / 5xx / network) with
+      // backoff and honours Retry-After, so a rate-limited proxy no longer
+      // silently kills the reply.
+      const result = await deepseekFetch({
+        url: DEEPSEEK_API,
         headers,
         signal: controller.signal,
-        body: JSON.stringify({
+        tag: 'helper-bot',
+        maxAttempts: 4,
+        body: {
           model: 'deepseek-chat',
           messages,
           max_tokens: 1024,
           temperature: 0.7,
           stream: false,
-        }),
+        },
       });
-      if (!resp.ok) {
-        console.error('[helper-bot] DeepSeek API error:', resp.status, await resp.text().catch(() => ''));
+      if (!result.ok) {
+        console.error(`[helper-bot] DeepSeek API error: HTTP ${result.status}`, result.body || result.error);
+        if (result.status === 429) {
+          insertHelperReply(triggerMsgId, 'The AI is rate-limited right now — try again in a moment, or switch to basic Venory.', roomType, roomId);
+        }
         return;
       }
-      const data = await resp.json();
+      const data = result.data;
       reply = data.choices?.[0]?.message?.content;
       if (!reply || !reply.trim()) return;
 
@@ -1581,6 +1590,20 @@ function registerBridgeSocket(socket) {
       recordId,
       questionId: typeof p?.questionId === 'string' ? p.questionId : '',
       error: typeof p?.error === 'string' ? p.error : 'resolve failed',
+    });
+  });
+  // Compact result from the bridge → the owner's DM (toast + size refresh).
+  socket.on('helper:compact:result', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    if (!convId) return;
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('helper:compact:result', {
+      convId,
+      sessionKey: typeof p?.sessionKey === 'string' ? p.sessionKey : '',
+      ok: !!p?.ok,
+      compacted: !!p?.compacted,
+      message: typeof p?.message === 'string' ? p.message : (p?.ok ? 'Session compacted' : 'Compact failed'),
+      error: typeof p?.error === 'string' ? p.error : '',
     });
   });
   // Full two-way history sync for the owner's helper DM: the bridge mirrors
@@ -3878,6 +3901,15 @@ io.on('connection', (socket) => {
       .slice(0, 4);
     if (!recordId || !questionId || !values.length) return;
     io.to('bridge:openclaw').emit('helper:answer', { recordId, questionId, values });
+  });
+  // Owner tapped Compact on the control bar → bridge compacts the session on
+  // the gateway (sessions.compact). Result flows back via helper:compact:result.
+  socket.on('helper:compact', (payload) => {
+    if (socket.userId !== OPENCLAW_OWNER_ID) return;
+    const sessionKey = typeof payload?.sessionKey === 'string' ? payload.sessionKey.trim() : '';
+    if (!sessionKey) return;
+    const io = app.get('io');
+    io.to('bridge:openclaw').emit('helper:compact', { sessionKey });
   });
 
   // Stop the in-flight helper response for a room (all accounts). Resolves the
