@@ -352,6 +352,59 @@ function showAiModerationModal(reason, opts = {}) {
   setTimeout(() => overlay.querySelector('#ai-mod-ok')?.focus(), 50);
 }
 
+/** The two known mirrors of this chat app. "Primary" is the custom domain; "secondary"
+ *  is the direct Fly.io host (works even if the custom domain is down). */
+const CHAT_LINKS = [
+  { id: 'primary', label: 'Primary Link', url: 'https://discord.jimmyqrg.com', hint: 'discord.jimmyqrg.com' },
+  { id: 'secondary', label: 'Secondary Link', url: 'https://jchat.fly.dev', hint: 'jchat.fly.dev' },
+];
+
+/**
+ * "Choose Link" modal, shown once each time the chat app is opened from Home or
+ * Contacts. The user picks which host to load the app from; picking navigates
+ * the top-level window to that origin so the whole app (cookies, sockets,
+ * static assets) runs on the chosen host rather than cross-origin.
+ *
+ * Choice is remembered in localStorage purely to mark the last-used option —
+ * the modal still appears on every fresh open, as requested.
+ */
+function showChooseLinkModal() {
+  if (document.querySelector('.choose-link-overlay')) return;
+  let last = null;
+  try { last = localStorage.getItem('chatChosenLink'); } catch (_) {}
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay choose-link-overlay';
+  const options = CHAT_LINKS.map((l) => `
+    <button type="button" class="choose-link-option${last === l.id ? ' is-last' : ''}" data-link-id="${l.id}" data-link-url="${l.url}">
+      <span class="choose-link-option-label">${escapeHtml(l.label)}</span>
+      <span class="choose-link-option-url">${escapeHtml(l.hint)}</span>
+      ${last === l.id ? `<span class="choose-link-option-badge">${escapeHtml(tx('chooseLinkLastUsed', 'Last used'))}</span>` : ''}
+    </button>`).join('');
+
+  overlay.innerHTML = `
+    <div class="modal choose-link-modal" role="dialog" aria-modal="true" aria-labelledby="choose-link-title">
+      <h3 id="choose-link-title">${escapeHtml(tx('chooseLinkTitle', 'Choose Link'))}</h3>
+      <p class="modal-hint">${escapeHtml(tx('chooseLinkHint', 'Pick which link to open the chat on. Primary is the main address; Secondary is the direct backup host.'))}</p>
+      <div class="choose-link-options">${options}</div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.querySelectorAll('.choose-link-option').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-link-id');
+      const url = btn.getAttribute('data-link-url');
+      try { localStorage.setItem('chatChosenLink', id); } catch (_) {}
+      if (url && url !== window.location.origin) {
+        window.location.href = url + '/chat/group/';
+      } else {
+        overlay.remove();
+      }
+    });
+  });
+}
+
 /** Lightweight blocking overlay shown while compression runs. Returns { update(pct), close() }. */
 function showCompressingOverlay() {
   const overlay = document.createElement('div');
@@ -12495,6 +12548,16 @@ async function init() {
   }
   applyRoute(route);
   postActiveRoomToPush();
+
+  // Opening the chat app from Home or Contacts prompts for which link to use
+  // (Primary = discord.jimmyqrg.com, Secondary = jchat.fly.dev). Shown once per
+  // app open, after the shell has mounted so the modal sits above real content.
+  if (!window._chooseLinkShown) {
+    window._chooseLinkShown = true;
+    const r = parseRoute();
+    const onHomeOrContacts = r.page === 'chat' && !r.dmUserId;
+    if (onHomeOrContacts) showChooseLinkModal();
+  }
   } catch (err) {
     if (err?.status === 401 && typeof window !== 'undefined' && window.self !== window.top) {
       state.user = null;

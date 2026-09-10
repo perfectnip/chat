@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Source-of-truth deployment: https://tintly555.github.io/games/fps/
-  This copy in the chat repo is for editing; multiplayer hits chat.jimmyqrg.com via meta below when hosted on static Pages.
+  This copy in the chat repo is for editing; multiplayer hits discord.jimmyqrg.com via meta below when hosted on static Pages.
   Crossfire mode is PVP (player vs player); Arena is PVE / co-op vs zombies.
 -->
 <html lang="en">
@@ -80,7 +80,7 @@
   <!-- Only the script-injected <base> above should set the document base (folder of this HTML).
        A second fixed base (e.g. chat origin) breaks relative game-ui/ + walls.png when the page is not at site root or when assets live beside this file. -->
   <!-- Socket.IO / multiplayer API host only — do not use as primary CDN for game-ui / menu.mp3 (same-origin loads avoid 404 + Web Audio CORS). -->
-  <meta name="game-multiplayer-origin" content="https://chat.jimmyqrg.com" />
+  <meta name="game-multiplayer-origin" content="https://discord.jimmyqrg.com" />
   <!-- Optional absolute base for walls.png + game-ui/ when this HTML is embedded or hosted away from those files (empty = auto-detect). -->
   <meta name="game-asset-base" content="" />
   <!-- Where static files from public/ are mounted: empty = site root (e.g. Fly: /walls.png). GitHub Pages subpath: content="/games/fps" -->

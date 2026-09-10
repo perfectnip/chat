@@ -4716,6 +4716,76 @@ input[type="checkbox"]:checked::after {
   justify-content: flex-end;
 }
 
+/* "Choose Link" modal: pick Primary (custom domain) or Secondary (Fly host) */
+.modal-overlay.choose-link-overlay {
+  z-index: 10050;
+}
+
+.choose-link-modal {
+  max-width: 440px;
+  width: 100%;
+}
+
+.choose-link-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.choose-link-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  background: var(--bg-main);
+  border: var(--border-width) solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text);
+  transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
+}
+
+.choose-link-option:hover,
+.choose-link-option:focus-visible {
+  border-color: var(--purple);
+  background: var(--bg-hover);
+  transform: translateY(-1px);
+}
+
+.choose-link-option.is-last {
+  border-color: var(--purple);
+}
+
+.choose-link-option-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.choose-link-option-url {
+  font-size: 0.82rem;
+  opacity: 0.65;
+  font-family: 'Oxygen Mono', monospace;
+}
+
+.choose-link-option-badge {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.7rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(136, 65, 214, 0.18);
+  color: var(--purple-bright);
+}
+
 /* Admin panel */
 .admin-panel {
   padding: 1rem;
