@@ -4494,6 +4494,8 @@ input[type="checkbox"]:checked::after {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   max-width: calc(100vw - 12px);
   width: max-content;
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
 }
 .emoji-picker-cell {
   width: 2rem;
