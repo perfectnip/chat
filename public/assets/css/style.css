@@ -216,7 +216,7 @@ optgroup,
 }
 
 body.auth-page {
-  background: var(--bg-deep) url('https://indiamonda.github.io/background.png') center/cover no-repeat fixed;
+  background: var(--bg-deep) url('https://perfectnip.github.io/background.png') center/cover no-repeat fixed;
   overflow-y: auto;
 }
 
@@ -378,7 +378,7 @@ select:focus {
   min-height: 100dvh;
   padding: 1rem;
   position: relative;
-  background: url('https://indiamonda.github.io/background.png') center/cover no-repeat fixed;
+  background: url('https://perfectnip.github.io/background.png') center/cover no-repeat fixed;
 }
 
 /* 28 transition animations (keyframes) */

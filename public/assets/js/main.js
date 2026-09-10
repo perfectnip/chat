@@ -7457,7 +7457,7 @@ function markdownToHtml(md) {
       if (!text) return text;
       let out = text;
       // Run the generic domain+path matcher first so a URL like
-      // "github.com/indiamonda.github.io" is captured as ONE link. If the
+      // "github.com/perfectnip.github.io" is captured as ONE link. If the
       // github.io-specific rule ran first it would split it into two.
       out = applyToPlainParts(out, t => t.replace(/(?<![\/">])(www\.[^\s<>"']+)/g, (_, u) => mkLink(u)));
       out = applyToPlainParts(out, t => t.replace(/(?<![\/"':@\w.-])((?:[a-zA-Z0-9][-a-zA-Z0-9_]*\.)+[a-zA-Z0-9][-a-zA-Z0-9_]*(?::\d+)?(?:\/[^\s<>"']*)?)/g, (_, url) => {
@@ -7810,7 +7810,7 @@ function showWordleModal() {
   overlay.innerHTML = `
     <div class="wordle-modal">
       <button type="button" class="wordle-modal-close" aria-label="Close"><span class="icon" aria-hidden="true">${ICON_CLOSE}</span></button>
-      <iframe src="https://indiamonda.github.io/wordle" title="Wordle" class="wordle-iframe"></iframe>
+      <iframe src="https://perfectnip.github.io/wordle" title="Wordle" class="wordle-iframe"></iframe>
     </div>
   `;
   const close = () => overlay.remove();
@@ -8415,7 +8415,7 @@ function triggerGrumm() {
 
 /** /jimmyqrg: open the official sister site in a new tab. */
 function openJimmyqrgSite() {
-  try { window.open('https://indiamonda.github.io', '_blank', 'noopener,noreferrer'); }
+  try { window.open('https://perfectnip.github.io', '_blank', 'noopener,noreferrer'); }
   catch (_) { showToast('Pop-up blocked'); }
 }
 
@@ -9897,7 +9897,7 @@ function bindMain() {
         // 2) Legacy group commands — now available in DMs too.
         const cmd = text.split(/\s/)[0].toLowerCase();
         if (cmd === '/games') {
-          window.open('https://indiamonda.github.io/page');
+          window.open('https://perfectnip.github.io/page');
           input.value = '';
           resizeComposerInput();
           return;

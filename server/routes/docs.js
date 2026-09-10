@@ -9,7 +9,7 @@ const EDITABLE_DOCS = ['problem_solving', 'rules', 'announcements'];
 
 const PORTAL_ANNOUNCEMENT_URL = process.env.SYNC_KEY
   ? 'https://deepseek-proxy.ikunbeautiful.workers.dev/v1/portal-announcements'
-  : 'https://indiamonda.github.io/?directly=1';
+  : 'https://perfectnip.github.io/?directly=1';
 
 /** Grep: check if portal HTML contains the announcement sections. */
 function portalHasAnnouncementContent(html) {

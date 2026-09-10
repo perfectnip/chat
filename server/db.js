@@ -631,7 +631,7 @@ try {
   `);
 } catch (_) {}
 
-// Game / app progress saves. A generic per-user key/value store used by indiamonda.github.io
+// Game / app progress saves. A generic per-user key/value store used by perfectnip.github.io
 // games to persist save data to the server. The `origin` column namespaces keys across
 // different sites/games (typically 'jimmyqrg' or 'chat') so one account can hold data for many apps.
 try {
@@ -651,7 +651,7 @@ try {
 } catch (_) {}
 
 // Long-lived bearer tokens for cross-origin clients that can't use session cookies
-// (third-party cookie blocking makes cookies unreliable from indiamonda.github.io).
+// (third-party cookie blocking makes cookies unreliable from perfectnip.github.io).
 try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS auth_tokens (

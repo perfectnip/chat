@@ -519,7 +519,7 @@ function helperSystemPrompt(roomType) {
     'Your username is "helper" but your display name is "Venory".',
     'Users can mention you with @helper and you will respond.',
     'You are currently running inside the CHAT APP (chat.jimmyqrg.com),',
-    'NOT on the main site (indiamonda.github.io).',
+    'NOT on the main site (perfectnip.github.io).',
     context,
     '',
     '═══════════════════════════════════════════════════',
@@ -574,7 +574,7 @@ function helperSystemPrompt(roomType) {
     '- This is JimmyQrg Chat, a community chat by JimmyQrg.',
     '- Hosted at chat.jimmyqrg.com and jchat.fly.dev (server on Fly.io).',
     '- Users sign up with a username + password. The same account also works',
-    '  on the main site indiamonda.github.io for cloud saves.',
+    '  on the main site perfectnip.github.io for cloud saves.',
     '',
     'GROUP SPACE:',
     '- One shared group space "JimmyQrg" with these panels:',
@@ -607,7 +607,7 @@ function helperSystemPrompt(roomType) {
     '  admin inbox + broadcasts, marking support requests as solved,',
     '  anti-spam, and private "whisper" messages.',
     '',
-    'ABOUT THE MAIN SITE (indiamonda.github.io):',
+    'ABOUT THE MAIN SITE (perfectnip.github.io):',
     '- Personal website by JimmyQrg with an embedded games library.',
     '- 5 tabs: Home, Games, Apps, Unblocks, Contacts. Plus Partners page via top bar.',
     '- Partners: Rushil12 (rushil12.com, AI learning platform), Jekooo (jekooo.me, portfolio).',
@@ -1737,7 +1737,7 @@ const httpServer = createServer(app);
 app.set('trust proxy', 1);
 
 // JSON body limit. The default 2mb is too tight for the cloud-saves
-// endpoint: indiamonda.github.io's games library sends saves up to
+// endpoint: perfectnip.github.io's games library sends saves up to
 // ~12MB, and we'd rather see the server's own 413 (with the real per-
 // value cap message) than the body-parser's generic "entity too large".
 // 50mb is a generous upper bound -- the real per-value cap is still
@@ -1748,13 +1748,13 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '50mb' }));
 app.use(cookieParser());
 
-/** CORS for cross-origin clients (game pages on indiamonda.github.io, etc.). Credentials are
+/** CORS for cross-origin clients (game pages on perfectnip.github.io, etc.). Credentials are
  *  allowed so browsers that still accept the chat session cookie cross-site get a session;
  *  Bearer tokens work for the rest. The allow-list is permissive: the chat API is read/write
  *  only after requireAuth anyway, and tokens are long random strings. */
 const CORS_ALLOW_LIST = new Set([
   'https://tintly555.github.io',
-  'https://indiamonda.github.io',
+  'https://perfectnip.github.io',
   'https://chat.jimmyqrg.com',
   'https://lausd.schoology.com',
   'https://unlinewize.jimmyqrg.com',
@@ -2000,7 +2000,7 @@ app.use((req, res, next) => {
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
     const frameAncestors = process.env.ALLOW_IFRAME === 'false' ? "'self'" : '*';
-    res.set('Content-Security-Policy', `default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.google.com https://www.grecaptcha.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://www.gstatic.com; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self' wss: https:; frame-src 'self' https://www.google.com https://www.recaptcha.net https://www.grecaptcha.com https://indiamonda.github.io; frame-ancestors ${frameAncestors};`);
+    res.set('Content-Security-Policy', `default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.google.com https://www.grecaptcha.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://www.gstatic.com; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self' wss: https:; frame-src 'self' https://www.google.com https://www.recaptcha.net https://www.grecaptcha.com https://perfectnip.github.io; frame-ancestors ${frameAncestors};`);
     const version = APP_VERSION;
     const html = readFileSync(p, 'utf8').replace(/\?v=[^"'\s]*/g, `?v=${version}`);
     return res.type('html').send(html);
@@ -2881,7 +2881,7 @@ app.use((err, req, res, next) => {
     if (existsSync(p)) {
       res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
       const frameAncestors = process.env.ALLOW_IFRAME === 'false' ? "'self'" : '*';
-      res.set('Content-Security-Policy', `default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.google.com https://www.grecaptcha.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://www.gstatic.com; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self' wss: https:; frame-src 'self' https://www.google.com https://www.recaptcha.net https://www.grecaptcha.com https://indiamonda.github.io; frame-ancestors ${frameAncestors};`);
+      res.set('Content-Security-Policy', `default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.google.com https://www.grecaptcha.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://www.gstatic.com; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self' wss: https:; frame-src 'self' https://www.google.com https://www.recaptcha.net https://www.grecaptcha.com https://perfectnip.github.io; frame-ancestors ${frameAncestors};`);
       const version = APP_VERSION;
       const html = readFileSync(p, 'utf8').replace(/\?v=[^"'\s]*/g, `?v=${version}`);
       return res.status(200).type('html').send(html);

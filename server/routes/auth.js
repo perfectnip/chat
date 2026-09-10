@@ -52,7 +52,7 @@ async function verifyRecaptcha(token) {
   }
 }
 
-/** True when the caller looks like an off-origin client (e.g. indiamonda.github.io). Such clients
+/** True when the caller looks like an off-origin client (e.g. perfectnip.github.io). Such clients
  *  cannot reliably use session cookies because browsers block third-party cookies, so we also
  *  hand back a bearer token they can store and send via `Authorization: Bearer ...`. */
 function wantsToken(req) {
@@ -295,7 +295,7 @@ router.post('/token', requireAuth, (req, res) => {
   res.json({ token });
 });
 
-/** SSO handoff from an external site (e.g. indiamonda.github.io). Presenting a valid bearer token
+/** SSO handoff from an external site (e.g. perfectnip.github.io). Presenting a valid bearer token
  *  elevates this request into a first-party session cookie so the chat SPA then works normally.
  *  POST form is for fetch() handoff from the SPA; GET form is a full-page redirect landing. */
 router.post('/sso', (req, res) => {
