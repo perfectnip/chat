@@ -353,59 +353,6 @@ function showAiModerationModal(reason, opts = {}) {
   setTimeout(() => overlay.querySelector('#ai-mod-ok')?.focus(), 50);
 }
 
-/** The two known mirrors of this chat app. "Primary" is the custom domain; "secondary"
- *  is the direct Fly.io host (works even if the custom domain is down). */
-const CHAT_LINKS = [
-  { id: 'primary', label: 'Primary Link', url: 'https://discord.jimmyqrg.com', hint: 'discord.jimmyqrg.com' },
-  { id: 'secondary', label: 'Secondary Link', url: 'https://jchat.fly.dev', hint: 'jchat.fly.dev' },
-];
-
-/**
- * "Choose Link" modal, shown once each time the chat app is opened from Home or
- * Contacts. The user picks which host to load the app from; picking navigates
- * the top-level window to that origin so the whole app (cookies, sockets,
- * static assets) runs on the chosen host rather than cross-origin.
- *
- * Choice is remembered in localStorage purely to mark the last-used option —
- * the modal still appears on every fresh open, as requested.
- */
-function showChooseLinkModal() {
-  if (document.querySelector('.choose-link-overlay')) return;
-  let last = null;
-  try { last = localStorage.getItem('chatChosenLink'); } catch (_) {}
-
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay choose-link-overlay';
-  const options = CHAT_LINKS.map((l) => `
-    <button type="button" class="choose-link-option${last === l.id ? ' is-last' : ''}" data-link-id="${l.id}" data-link-url="${l.url}">
-      <span class="choose-link-option-label">${escapeHtml(l.label)}</span>
-      <span class="choose-link-option-url">${escapeHtml(l.hint)}</span>
-      ${last === l.id ? `<span class="choose-link-option-badge">${escapeHtml(tx('chooseLinkLastUsed', 'Last used'))}</span>` : ''}
-    </button>`).join('');
-
-  overlay.innerHTML = `
-    <div class="modal choose-link-modal" role="dialog" aria-modal="true" aria-labelledby="choose-link-title">
-      <h3 id="choose-link-title">${escapeHtml(tx('chooseLinkTitle', 'Choose Link'))}</h3>
-      <p class="modal-hint">${escapeHtml(tx('chooseLinkHint', 'Pick which link to open the chat on. Primary is the main address; Secondary is the direct backup host.'))}</p>
-      <div class="choose-link-options">${options}</div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-
-  overlay.querySelectorAll('.choose-link-option').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-link-id');
-      const url = btn.getAttribute('data-link-url');
-      try { localStorage.setItem('chatChosenLink', id); } catch (_) {}
-      if (url && url !== window.location.origin) {
-        window.location.href = url + '/chat/group/';
-      } else {
-        overlay.remove();
-      }
-    });
-  });
-}
-
 /** Lightweight blocking overlay shown while compression runs. Returns { update(pct), close() }. */
 function showCompressingOverlay() {
   const overlay = document.createElement('div');
@@ -1916,11 +1863,21 @@ function currentRoomKey() {
 /** Tell the service worker which room we're viewing so it suppresses pushes for it. */
 function postActiveRoomToPush() {
   if (!('serviceWorker' in navigator)) return;
-  const roomType = state.dmUserId ? 'dm' : 'group';
-  const roomId = state.dmUserId ? state.convId : state.panel;
+  const route = parseRoute();
+  let roomType = null;
+  let roomId = null;
+  if (route.page === 'chat') {
+    if (route.group) {
+      roomType = 'group';
+      roomId = route.panel || null;
+    } else if (route.dmUserId && state.convId) {
+      roomType = 'dm';
+      roomId = state.convId;
+    }
+  }
   navigator.serviceWorker.getRegistration('/sw.js').then((reg) => {
     if (reg?.active) {
-      reg.active.postMessage({ type: 'jchat:active-room', roomType, roomId: roomId || null });
+      reg.active.postMessage({ type: 'jchat:active-room', roomType, roomId });
     }
   }).catch(() => {});
 }
@@ -2716,10 +2673,25 @@ async function resolveDndTimezoneFromCity(city) {
   return false;
 }
 
-function shouldShowNotification(trigger, fromUserId) {
+/** True when the user is currently on the chat page viewing exactly this
+ *  room (group panel or DM). Messages for it render live via the socket, so
+ *  they should never also fire a notification. */
+function isViewingRoom(roomType, roomId) {
+  if (!roomType || !roomId) return false;
+  const route = parseRoute();
+  if (route.page !== 'chat') return false;
+  if (roomType === 'group') return !!route.group && route.panel === roomId;
+  if (roomType === 'dm') return !!route.dmUserId && state.convId === roomId;
+  return false;
+}
+
+function shouldShowNotification(trigger, fromUserId, roomType, roomId) {
   const prefs = state.notificationPrefs;
   if (!prefs?.enabled) return false;
   if (document.hasFocus?.() && document.visibilityState === 'visible') return false;
+  // The user is on this room's chat page — it already updates live; don't
+  // also ping them (even when the tab is in the background).
+  if (isViewingRoom(roomType, roomId)) return false;
   const now = Date.now();
   if (prefs.dnd_until && now < prefs.dnd_until) return false;
   if (prefs.dnd_at_night && isNightTime()) return false;
@@ -2972,7 +2944,7 @@ function connectSocket() {
     }
     addMessageLocal(msg);
     const trigger = msg.room_type === 'dm' ? 'dm' : 'group';
-    if (shouldShowNotification(trigger, msg.sender_id)) {
+    if (shouldShowNotification(trigger, msg.sender_id, msg.room_type, msg.room_id)) {
       const from = msg.display_name || msg.username || 'Someone';
       const preview = (msg.content || '').slice(0, 80);
       showDesktopNotification(`${from}: ${trigger === 'dm' ? 'Private message' : 'Group'}`, preview || '(attachment)');
@@ -4311,6 +4283,12 @@ function render() {
   const app = document.getElementById('app');
   if (!app) return;
   app.classList.remove('app-loading');
+  // Preserve composer focus + selection across this re-render so incoming
+  // messages/notifications don't kick the user out of their typing state.
+  const prevInput = document.getElementById('composer-input');
+  const hadComposerFocus = !!prevInput && document.activeElement === prevInput;
+  const selStart = hadComposerFocus ? prevInput.selectionStart : null;
+  const selEnd = hadComposerFocus ? prevInput.selectionEnd : null;
   const route = parseRoute();
 
   if (!state.user) {
@@ -4354,6 +4332,19 @@ function render() {
   if (state._voiceJoined && state._voiceLocalStream) {
     const localVid = document.getElementById('voice-local-video');
     if (localVid && state._voiceCamOn) { localVid.srcObject = state._voiceLocalStream; }
+  }
+  // Restore the composer focus/selection captured above (typing state keeps
+  // flowing across the render instead of being interrupted).
+  if (hadComposerFocus) {
+    const input = document.getElementById('composer-input');
+    if (input) {
+      try {
+        input.focus({ preventScroll: true });
+        if (typeof selStart === 'number' && typeof selEnd === 'number') {
+          input.setSelectionRange(selStart, selEnd);
+        }
+      } catch (_) { /* ignore */ }
+    }
   }
 }
 
@@ -9842,14 +9833,17 @@ function bindMain() {
     input.style.height = Math.max(22, h) + 'px';
   }
 
-  // Curated emoji set. Organized into rows visually by category in the picker.
-  // Kept small (around 60) for fast scanning and tiny payload.
+  // Curated emoji set, grouped by category for fast scanning.
   const EMOJI_LIST = [
     '😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩',
     '😘','😗','😚','😙','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨',
     '😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕',
+    '😱','😳','😭','🥳','😎','🤯','🥶','🥵','🤬','😈','👻','💀','🤡','👀','🙌','🤝',
+    '💪','🙏','🤦','🤷','😢','🥺','😤','😠','😡','😓','😥','🥱','😮','😲','🫠','🫡',
     '👍','👎','👌','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','👇','☝️','✋','🤚','🖐️',
-    '❤️','💔','💖','💯','🔥','✨','🎉','🎊','🎁','🎈','🎂','🍰','🍕','🍔','🍟','☕',
+    '❤️','💔','💖','💜','🤍','🖤','💙','💚','💛','🧡','💯','🔥','✨','🎉','🎊','🎁',
+    '🎈','🎂','🍰','🍕','🍔','🍟','☕','🍿','✅','❌','⚠️','❗','❓','💡','📌','🚀',
+    '🌟','⭐','🏆','🥇','💤','💥','🎮','🎵','🎶','🍀','🦄','👑','🧠','🗿','😺','🐶',
   ];
   function openEmojiPicker(btn) {
     const existing = document.getElementById('emoji-picker');
@@ -12677,16 +12671,6 @@ async function init() {
   }
   applyRoute(route);
   postActiveRoomToPush();
-
-  // Opening the chat app from Home or Contacts prompts for which link to use
-  // (Primary = discord.jimmyqrg.com, Secondary = jchat.fly.dev). Shown once per
-  // app open, after the shell has mounted so the modal sits above real content.
-  if (!window._chooseLinkShown) {
-    window._chooseLinkShown = true;
-    const r = parseRoute();
-    const onHomeOrContacts = r.page === 'chat' && !r.dmUserId;
-    if (onHomeOrContacts) showChooseLinkModal();
-  }
   } catch (err) {
     if (err?.status === 401 && typeof window !== 'undefined' && window.self !== window.top) {
       state.user = null;

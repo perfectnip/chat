@@ -17,17 +17,26 @@ self.addEventListener('message', (event) => {
   const msg = event.data;
   if (!msg) return;
   if (msg.type === 'jchat:active-room') {
-    activeRooms.set(event.source?.id || 'main', `${msg.roomType}:${msg.roomId}`);
+    // roomType is null when the user navigated away from any chat room
+    // (inbox/settings) — clear the entry so those pages don't suppress.
+    if (msg.roomType && msg.roomId) {
+      activeRooms.set(event.source?.id || 'main', `${msg.roomType}:${msg.roomId}`);
+    } else {
+      activeRooms.delete(event.source?.id || 'main');
+    }
   } else if (msg.type === 'jchat:clear-active-room') {
     activeRooms.delete(event.source?.id || 'main');
   }
 });
 
+// The room is open on the chat page in this client — the socket already
+// renders its messages live, so a push notification would be noise. This
+// holds even when the tab is backgrounded (the page still shows that room).
 async function isRoomFocusedOnClient(roomType, roomId) {
   const key = `${roomType}:${roomId}`;
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   for (const client of clients) {
-    if (client.focused && client.visibilityState === 'visible' && activeRooms.get(client.id) === key) {
+    if (activeRooms.get(client.id) === key) {
       return true;
     }
   }
