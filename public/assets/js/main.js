@@ -6624,26 +6624,57 @@ if (typeof document !== 'undefined') {
   const positionSessionMenu = (picker, menu) => {
     menu.classList.remove('hc-session-menu-flip', 'hc-session-menu-right');
     menu.style.maxHeight = '';
+    menu.style.maxWidth = '';
+    menu.style.right = '';
     const trigger = picker.querySelector('.hc-session-trigger');
     if (!trigger) return;
     const r = trigger.getBoundingClientRect();
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
     const MENU_GAP = 4;
     const EDGE = 8;
-    const cssMax = parseFloat(getComputedStyle(menu).maxHeight) || 260;
-    const height = Math.min(menu.offsetHeight, cssMax);
-    // Horizontal: right-align when left-anchored would spill off-screen.
-    if (r.left + menu.offsetWidth > vw) {
-      menu.classList.add('hc-session-menu-right');
+    const cssMaxH = parseFloat(getComputedStyle(menu).maxHeight) || 260;
+    const cssMaxW = parseFloat(getComputedStyle(menu).maxWidth) || 320;
+    const width = menu.offsetWidth;
+    const height = Math.min(menu.offsetHeight, cssMaxH);
+    // The menu lives inside .chat-main (overflow: hidden), so it must fit
+    // the CONTAINER, not the viewport — otherwise the app's left bar (wide
+    // screens) or bottom bar (phones) covers/clips part of the menu.
+    const host = picker.closest('.chat-main');
+    const hr = host ? host.getBoundingClientRect() : null;
+    const L = hr ? hr.left : 0;
+    const R = hr ? hr.right : window.innerWidth;
+    const T = hr ? hr.top : 0;
+    const B = hr ? hr.bottom : window.innerHeight;
+    // Horizontal: right-align when left-anchored would spill off the right
+    // edge; cap the width when neither anchoring fits the container.
+    if (r.left + width > R - EDGE) {
+      if (r.right - width >= L + EDGE) {
+        menu.classList.add('hc-session-menu-right');
+      } else {
+        // Too wide for the space around the trigger: cap the width to the
+        // container, then re-measure before deciding the anchor.
+        const wMax = Math.max(96, (R - L) - 2 * EDGE);
+        if (wMax < cssMaxW) menu.style.maxWidth = wMax + 'px';
+        const capped = Math.min(menu.offsetWidth, wMax);
+        if (r.left + capped > R - EDGE) {
+          menu.classList.add('hc-session-menu-right');
+          // Nudge right so the menu's left edge clears the container (the
+          // left bar) without pushing the right edge off-screen.
+          const leftEdge = r.right - capped;
+          const shift = (L + EDGE) - leftEdge;
+          if (shift > 0 && r.right + shift <= R - EDGE) {
+            menu.style.right = `-${shift}px`;
+          }
+        }
+      }
     }
-    // Vertical: flip upward when it would overflow the bottom edge.
-    if (r.bottom + height + MENU_GAP + EDGE > vh) {
+    // Vertical: flip upward when it would overflow the container's bottom;
+    // cap height so the menu never extends under the app nav or header.
+    if (r.bottom + height + MENU_GAP + EDGE > B) {
       menu.classList.add('hc-session-menu-flip');
-      const avail = r.top - MENU_GAP - EDGE;
+      const avail = r.top - T - MENU_GAP - EDGE;
       if (avail < height) menu.style.maxHeight = Math.max(96, avail) + 'px';
-    } else if (vh - r.bottom - MENU_GAP - EDGE < height) {
-      menu.style.maxHeight = Math.max(96, vh - r.bottom - MENU_GAP - EDGE) + 'px';
+    } else if (B - r.bottom - MENU_GAP - EDGE < height) {
+      menu.style.maxHeight = Math.max(96, B - r.bottom - MENU_GAP - EDGE) + 'px';
     }
   };
   document.addEventListener('click', (e) => {
