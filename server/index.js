@@ -11,7 +11,6 @@ import bcrypt from 'bcryptjs';
 import { sessionMiddleware, touchSession, getCurrentUser, requireAuth, canRecallOrEdit, canSendInbox, canBroadcast, canEditDocs, canKick, canDeleteMessages, canTimeout, canUnlimitedEditRecall, canSeeWhispers, tokenAuthMiddleware } from './auth.js';
 import { db, GROUP_ID, PANELS, HELPER_USER_ID, isBlacklisted, isUserDeleted, canSeePrivateUser, PRIVATE_USER_BLOCKED, whisperVisibleClause } from './db.js';
 import { moderateMessage } from './ai-moderation.js';
-import { deepseekFetch } from './deepseek-client.js';
 import { upload } from './upload.js';
 import { getUploadUrl, getFileRef, ensurePlayableVideo } from './upload.js';
 import authRoutes from './routes/auth.js';
@@ -1362,31 +1361,23 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
     let reply = '';
     for (let attempt = 0; attempt < 3; attempt++) {
       if (controller.signal.aborted) break;
-      // deepseekFetch retries transient failures (429 / 5xx / network) with
-      // backoff and honours Retry-After, so a rate-limited proxy no longer
-      // silently kills the reply.
-      const result = await deepseekFetch({
-        url: DEEPSEEK_API,
+      const resp = await fetch(DEEPSEEK_API, {
+        method: 'POST',
         headers,
         signal: controller.signal,
-        tag: 'helper-bot',
-        maxAttempts: 4,
-        body: {
+        body: JSON.stringify({
           model: 'deepseek-chat',
           messages,
           max_tokens: 1024,
           temperature: 0.7,
           stream: false,
-        },
+        }),
       });
-      if (!result.ok) {
-        console.error(`[helper-bot] DeepSeek API error: HTTP ${result.status}`, result.body || result.error);
-        if (result.status === 429) {
-          insertHelperReply(triggerMsgId, 'The AI is rate-limited right now — try again in a moment, or switch to basic Venory.', roomType, roomId);
-        }
+      if (!resp.ok) {
+        console.error('[helper-bot] DeepSeek API error:', resp.status, await resp.text().catch(() => ''));
         return;
       }
-      const data = result.data;
+      const data = await resp.json();
       reply = data.choices?.[0]?.message?.content;
       if (!reply || !reply.trim()) return;
 
