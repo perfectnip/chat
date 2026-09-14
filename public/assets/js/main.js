@@ -3152,9 +3152,16 @@ function connectSocket() {
     if (/not found|cancelled|expired/i.test(String(p?.error || ''))) {
       delete state.helperQuestions[p.recordId];
     }
+    // The client marks the whole record as sending — clear every question's
+    // busy flag so the panel is tappable again.
+    const rec = state.helperQuestions[p.recordId];
+    const qs = rec && Array.isArray(rec.questions) ? rec.questions : [];
+    for (const qq of qs) {
+      const k = `${p.recordId}:${qq.questionId}`;
+      state.helperQuestionSending[k] = false;
+    }
     const key = p.questionId ? `${p.recordId}:${p.questionId}` : '';
     if (key) {
-      state.helperQuestionSending[key] = false;
       state.helperQuestionErrors[key] = typeof p?.error === 'string' ? p.error : 'resolve failed';
     }
     updateHelperQuestionPanel();
@@ -6768,6 +6775,40 @@ if (typeof document !== 'undefined') {
   document.addEventListener('click', (e) => {
     const t = e.target && e.target.closest ? e.target : null;
     if (!t) return;
+    // All of a record's answers go to the gateway in ONE resolve — partial
+    // resolves are rejected with "complete the other question".
+    const recordAnswersPayload = (rec) => {
+      const qs = Array.isArray(rec?.questions) ? rec.questions : [];
+      const answers = [];
+      let missing = 0;
+      for (const q of qs) {
+        const vals = (state.helperQuestionSelections[`${rec.recordId}:${q.questionId}`] || []).slice();
+        if (!vals.length) missing++;
+        else answers.push({ questionId: q.questionId, values: vals });
+      }
+      return { answers, missing };
+    };
+    const trySendRecord = (rec, q) => {
+      const { answers, missing } = recordAnswersPayload(rec);
+      const key = `${rec.recordId}:${q.questionId}`;
+      if (missing > 0) {
+        // Still unanswered questions in this record — hold the send and
+        // hint instead of firing a resolve the gateway will reject.
+        for (const qq of (Array.isArray(rec.questions) ? rec.questions : [])) {
+          state.helperQuestionErrors[`${rec.recordId}:${qq.questionId}`] = '';
+        }
+        state.helperQuestionErrors[key] = `${missing} more question${missing > 1 ? 's' : ''} to answer`;
+        updateHelperQuestionPanel();
+        return;
+      }
+      for (const qq of (Array.isArray(rec.questions) ? rec.questions : [])) {
+        const k = `${rec.recordId}:${qq.questionId}`;
+        state.helperQuestionSending[k] = true;
+        state.helperQuestionErrors[k] = '';
+      }
+      updateHelperQuestionPanel();
+      state.socket?.emit('helper:answer', { recordId: rec.recordId, answers });
+    };
     const opt = t.closest ? t.closest('[data-hq-record][data-hq-question][data-hq-value]') : null;
     if (opt) {
       const rec = state.helperQuestions[opt.dataset.hqRecord];
@@ -6781,14 +6822,12 @@ if (typeof document !== 'undefined') {
         if (i >= 0) sel.splice(i, 1);
         else sel.push(opt.dataset.hqValue);
         state.helperQuestionSelections[key] = sel;
+        state.helperQuestionErrors[key] = '';
         updateHelperQuestionPanel();
         return;
       }
-      state.helperQuestionSending[key] = true;
-      state.helperQuestionErrors[key] = '';
       state.helperQuestionSelections[key] = [opt.dataset.hqValue];
-      updateHelperQuestionPanel();
-      state.socket?.emit('helper:answer', { recordId: rec.recordId, questionId: q.questionId, values: [opt.dataset.hqValue] });
+      trySendRecord(rec, q);
       return;
     }
     const send = t.closest ? t.closest('button.hq-send[data-hq-record][data-hq-question]') : null;
@@ -6799,10 +6838,7 @@ if (typeof document !== 'undefined') {
       const key = `${rec.recordId}:${q.questionId}`;
       const values = (state.helperQuestionSelections[key] || []).slice();
       if (!values.length || state.helperQuestionSending[key]) return;
-      state.helperQuestionSending[key] = true;
-      state.helperQuestionErrors[key] = '';
-      updateHelperQuestionPanel();
-      state.socket?.emit('helper:answer', { recordId: rec.recordId, questionId: q.questionId, values });
+      trySendRecord(rec, q);
     }
   });
   document.addEventListener('keydown', (e) => {

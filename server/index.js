@@ -3886,12 +3886,22 @@ io.on('connection', (socket) => {
   socket.on('helper:answer', (payload) => {
     if (socket.userId !== OPENCLAW_OWNER_ID) return;
     const recordId = typeof payload?.recordId === 'string' ? payload.recordId : '';
-    const questionId = typeof payload?.questionId === 'string' ? payload.questionId : '';
-    const values = (Array.isArray(payload?.values) ? payload.values : [])
-      .filter((v) => typeof v === 'string' && v)
-      .slice(0, 4);
-    if (!recordId || !questionId || !values.length) return;
-    io.to('bridge:openclaw').emit('helper:answer', { recordId, questionId, values });
+    // Batched: ALL of a record's answers go in one resolve (the gateway
+    // rejects partial answers). Accept the legacy single-question shape too.
+    const rawAnswers = Array.isArray(payload?.answers) && payload.answers.length
+      ? payload.answers
+      : (typeof payload?.questionId === 'string' && payload.questionId
+        ? [{ questionId: payload.questionId, values: payload?.values }]
+        : []);
+    const answers = rawAnswers.map((a) => ({
+      questionId: typeof a?.questionId === 'string' ? a.questionId : '',
+      values: (Array.isArray(a?.values) ? a.values : [])
+        .filter((v) => typeof v === 'string' && v)
+        .slice(0, 4),
+    })).filter((a) => a.questionId && a.values.length);
+    if (!recordId || !answers.length) return;
+    const io = app.get('io');
+    io.to('bridge:openclaw').emit('helper:answer', { recordId, answers });
   });
   // Owner tapped Compact on the control bar → bridge compacts the session on
   // the gateway (sessions.compact). Result flows back via helper:compact:result.

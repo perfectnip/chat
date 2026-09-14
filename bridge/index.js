@@ -1168,21 +1168,30 @@ socket.on('helper:compact', async (p) => {
 });
 
 // Owner answered an ask_user question in the DM → resolve it on the gateway.
+// All of a record's answers are sent in ONE resolve — the gateway rejects
+// partial answers ("complete the other question").
 socket.on('helper:answer', async (p) => {
   const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
-  const questionId = typeof p?.questionId === 'string' ? p.questionId : '';
-  const values = (Array.isArray(p?.values) ? p.values : [])
-    .filter((v) => typeof v === 'string' && v)
-    .slice(0, 4);
-  if (!/^ask_[a-f0-9]{32}$/.test(recordId) || !questionId || !values.length) return;
+  const rawAnswers = Array.isArray(p?.answers) && p.answers.length
+    ? p.answers
+    : (typeof p?.questionId === 'string' && p.questionId
+      ? [{ questionId: p.questionId, values: p?.values }]
+      : []);
+  const answers = rawAnswers.map((a) => ({
+    questionId: typeof a?.questionId === 'string' ? a.questionId : '',
+    values: (Array.isArray(a?.values) ? a.values : [])
+      .filter((v) => typeof v === 'string' && v)
+      .slice(0, 4),
+  })).filter((a) => a.questionId && a.values.length);
+  if (!/^ask_[a-f0-9]{32}$/.test(recordId) || !answers.length) return;
   try {
     await gwRpc('question.resolve', {
       id: recordId,
-      answers: { answers: { [questionId]: values } },
+      answers: { answers: Object.fromEntries(answers.map((a) => [a.questionId, a.values])) },
       resolvedBy: 'jimmyqrg',
     }, 8000);
     pendingQuestions.delete(recordId);
-    log('question resolved:', recordId, questionId, values.join(' | '));
+    log('question resolved:', recordId, answers.map((a) => `${a.questionId}:${a.values.join('|')}`).join(' '));
   } catch (err) {
     log('question resolve failed:', err.message);
     const msg = String(err.message || '');
@@ -1195,7 +1204,7 @@ socket.on('helper:answer', async (p) => {
     socket.emit('helper:question:resolve-failed', {
       convId: dmConvId,
       recordId,
-      questionId,
+      questionId: answers[0]?.questionId || '',
       error: msg.slice(0, 120),
     });
   }
