@@ -22,6 +22,7 @@ import {
   bumpUserModerationSeverity,
   getUserModerationSeverity,
 } from './db.js';
+import { deepseekFetch } from './deepseek-client.js';
 
 // Same endpoint the helper bot uses. No public fallback: without a
 // DEEPSEEK_KEY (or explicit DEEPSEEK_API_URL), AI moderation is disabled
@@ -249,22 +250,27 @@ async function callDeepseekJson(payload) {
   if (!DEEPSEEK_API) return null; // no key configured: moderation disabled (fail-open)
   const headers = { 'Content-Type': 'application/json' };
   if (process.env.DEEPSEEK_KEY) headers['Authorization'] = `Bearer ${process.env.DEEPSEEK_KEY}`;
+
+  // Retry transient failures (429 / 5xx / network) with backoff. Moderation
+  // still fails open, but a brief rate-limit no longer disables the filter
+  // for every message in the burst — it just adds a short delay.
+  // The caller's MOD_TIMEOUT_MS budget is shared across attempts via the
+  // outer AbortController, so a slow upstream can't stall past that bound.
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), MOD_TIMEOUT_MS);
   try {
-    const resp = await fetch(DEEPSEEK_API, {
-      method: 'POST',
+    const result = await deepseekFetch({
+      url: DEEPSEEK_API,
       headers,
       signal: ctrl.signal,
-      body: JSON.stringify(payload),
+      tag: 'ai-mod',
+      maxAttempts: 3,
+      baseDelayMs: 200,
+      maxDelayMs: 2500,
+      body: payload,
     });
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => '');
-      console.warn('[ai-mod] deepseek HTTP', resp.status, txt.slice(0, 200));
-      return null;
-    }
-    const data = await resp.json();
-    return data.choices?.[0]?.message?.content || null;
+    if (!result.ok) return null;
+    return result.data?.choices?.[0]?.message?.content || null;
   } catch (err) {
     if (err?.name === 'AbortError') console.warn('[ai-mod] deepseek timed out');
     else console.warn('[ai-mod] deepseek error:', err?.message || err);
