@@ -489,7 +489,12 @@ async function runAgent(task, controller) {
       // cases without stalling forever on long runs.
       const delay = GATEWAY_RETRY_DELAY_MS * Math.pow(3, attempt - 1);
       log('gateway retry', attempt + 1, '/', GATEWAY_MAX_ATTEMPTS, 'in', delay, 'ms after', lastErr?.message || lastErr);
-      await new Promise((r) => setTimeout(r, delay));
+      // Abort-aware wait: a stop during the backoff must cancel the retry
+      // instead of firing the same message at the gateway again.
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, delay);
+        controller.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
     }
     try {
       return await runAgentOnce(task, controller);
@@ -520,6 +525,7 @@ let dmSyncTimer = null;           // periodic DM transcript reconcile timer
 let listPushTimer = null;
 const recentSent = new Map();     // sessionKey -> { text, at } (user msgs we sent via tasks)
 const recentReplies = new Map();  // sessionKey -> { text, at } (assistant replies we delivered)
+const suppressAssistantUntil = new Map(); // sessionKey -> ts: drop zombie assistant relays after a stop
 const relayRate = new Map();      // sessionKey -> [timestamps]
 const RELAY_WINDOW_MS = 60 * 1000;
 const RELAY_MAX_PER_WINDOW = 20;
@@ -802,11 +808,14 @@ async function handleSessionMessage(p) {
       return;
     }
     if (role === 'user') {
+      suppressAssistantUntil.delete(dmKey); // a fresh turn supersedes a stopped zombie
       const sent = recentSent.get(dmKey);
       if (sent && now - sent.at < 10 * 60 * 1000 && sent.text === raw) return; // our own task
     } else {
       const activeTaskId = activeBySession.get(dmKey);
       if (activeTaskId && controllers.has(activeTaskId)) return; // reply path handles it
+      const until = suppressAssistantUntil.get(dmKey) || 0;
+      if (now < until) return; // stopped run: swallow the zombie reply
       const rep = recentReplies.get(dmKey);
       if (rep && now - rep.at < 10 * 60 * 1000 && rep.text === raw) return; // just delivered
     }
@@ -854,12 +863,20 @@ async function handleSessionMessage(p) {
       if (/^\[.*(media|user sent).*\]$/i.test(norm)) livePayload.text = '';
     }
   }
-  socket.emit('helper:session:live', livePayload);
-  // DM relay: only external activity + messages not already shown in the DM.
+  const until = suppressAssistantUntil.get(p.sessionKey) || 0;
   if (role === 'user') {
-    const sent = recentSent.get(p.sessionKey);
-    if (sent && now - sent.at < 5 * 60 * 1000 && sent.text === norm) return; // our own task
-  } else {
+    suppressAssistantUntil.delete(p.sessionKey); // a fresh turn supersedes a stopped zombie
+  } else if (now < until) {
+    log('session relay suppressed after stop:', p.sessionKey);
+    return; // stopped run: swallow the zombie reply everywhere (live + DM)
+  }
+  socket.emit('helper:session:live', livePayload);
+  // DM relay: assistant replies only. The owner's own user messages on the
+  // switched session must NOT be echoed into the DM — they came from the
+  // Control UI or another surface, and echoing them back reads as spam
+  // ("📡 you: …"). Assistant relays are the useful part of the mirror.
+  if (role === 'user') return;
+  {
     const activeTaskId = activeBySession.get(p.sessionKey);
     if (activeTaskId && controllers.has(activeTaskId)) return; // reply path handles it
     const rep = recentReplies.get(p.sessionKey);
@@ -1080,13 +1097,29 @@ socket.on('helper:task', (task) => {
   handleTask(task);
 });
 socket.on('helper:stop', (p) => {
-  const controller = controllers.get(p?.taskId);
+  let sk = typeof p?.sessionKey === 'string' ? p.sessionKey.trim() : '';
+  const taskId = typeof p?.taskId === 'string' ? p.taskId : '';
+  if (!sk && taskId) sk = taskSessionKeys.get(taskId) || '';
+  const controller = controllers.get(taskId);
   if (controller) controller.abort();
+  // A session-scoped stop may arrive WITHOUT a taskId (routed tasks have no
+  // server-side busy-map entry): abort whatever task runs on that session.
+  if (sk && !controller) {
+    const activeTaskId = activeBySession.get(sk);
+    if (activeTaskId) controllers.get(activeTaskId)?.abort();
+  }
+  // Zombie suppression: the gateway may keep running the turn after our
+  // abort (its chatAbortControllers only covers Control-UI-visible runs).
+  // Drop assistant relays for this session for a window so a stopped reply
+  // can't "auto-continue" into the DM a few seconds later.
+  if (sk) {
+    const nowTs = Date.now();
+    for (const [k, v] of suppressAssistantUntil) if (v < nowTs) suppressAssistantUntil.delete(k);
+    suppressAssistantUntil.set(sk, nowTs + 10 * 60 * 1000);
+  }
   // Also abort the gateway run itself (not just our HTTP request): a
   // destroyed request alone doesn't reliably stop the agent turn, and a
   // session-scoped stop for a viewed session has no local task at all.
-  let sk = typeof p?.sessionKey === 'string' ? p.sessionKey.trim() : '';
-  if (!sk && p?.taskId) sk = taskSessionKeys.get(p.taskId) || '';
   if (sk) {
     gwRpc('sessions.abort', { key: sk }, 8000)
       .then(() => log('session abort requested for', sk))
