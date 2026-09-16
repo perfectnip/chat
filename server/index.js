@@ -11,6 +11,7 @@ import bcrypt from 'bcryptjs';
 import { sessionMiddleware, touchSession, getCurrentUser, requireAuth, canRecallOrEdit, canSendInbox, canBroadcast, canEditDocs, canKick, canDeleteMessages, canTimeout, canUnlimitedEditRecall, canSeeWhispers, tokenAuthMiddleware } from './auth.js';
 import { db, GROUP_ID, PANELS, HELPER_USER_ID, isBlacklisted, isUserDeleted, canSeePrivateUser, PRIVATE_USER_BLOCKED, whisperVisibleClause } from './db.js';
 import { moderateMessage } from './ai-moderation.js';
+import { deepseekFetch } from './deepseek-client.js';
 import { upload } from './upload.js';
 import { getUploadUrl, getFileRef, ensurePlayableVideo } from './upload.js';
 import authRoutes from './routes/auth.js';
@@ -509,6 +510,14 @@ function sanitizeAgentOpts(payload) {
 const DEEPSEEK_API = process.env.DEEPSEEK_KEY
   ? 'https://api.deepseek.com/v1/chat/completions'
   : (process.env.DEEPSEEK_API_URL || ''); // No public fallback: without a key, AI is disabled (deployers bring their own key).
+
+// Basic Venory context budget: the number of messages is NOT limited — the
+// whole room history is fair game (including group messages that never
+// @mentioned the helper). When history exceeds the token budget, older
+// messages are compacted into a running summary instead of being cleared.
+const HELPER_CONTEXT_TOKEN_BUDGET = 10000;
+const HELPER_CONTEXT_KEEP_TOKENS = 6000;   // newest messages kept verbatim
+const HELPER_CONTEXT_MAX_ROWS = 1000;      // hard fetch cap to bound worst case
 
 function helperSystemPrompt(roomType) {
   var context = roomType === 'dm'
@@ -1068,56 +1077,112 @@ function helperSystemPrompt(roomType) {
   ].join('\n');
 }
 
-function buildHelperContext(triggerMsg, roomType, roomId, maxMessages = 14) {
-  // NOTE: messages.deleted_by_admin is `INTEGER NOT NULL DEFAULT 0` so
-  // `IS NULL` was effectively `WHERE FALSE` and the helper bot was getting
-  // an empty context for both DMs and group chat. Use `= 0` like everywhere
-  // else in this file (search for deleted_by_admin to confirm).
-  //
-  // Window size: 14 turns is enough memory for a typical convo without
-  // burying the new user message in noise. Smaller windows make weaker
-  // models (deepseek-chat) less likely to drift back to an older topic.
-  const chatRecent = db.prepare(`
-    SELECT m.content, m.sender_id, m.msg_type, m.created_at, u.username, u.display_name
-    FROM messages m LEFT JOIN users u ON u.id = m.sender_id
-    WHERE m.room_type = ? AND m.room_id = ?
-      AND m.recalled_at IS NULL AND m.deleted_by_admin = 0
-      AND (m.msg_type IS NULL OR m.msg_type != 'whisper')
-    ORDER BY m.created_at DESC LIMIT ?
-  `).all(roomType, roomId, maxMessages);
+function estimateTokens(text) {
+  return Math.ceil(String(text || '').length / 4);
+}
 
-  const helperRecent = db.prepare(`
-    SELECT m.content, m.sender_id, m.msg_type, m.created_at, u.username, u.display_name
-    FROM messages m LEFT JOIN users u ON u.id = m.sender_id
-    WHERE m.room_type = ? AND m.room_id = ?
-      AND m.sender_id = ?
-      AND m.recalled_at IS NULL AND m.deleted_by_admin = 0
-      AND (m.msg_type IS NULL OR m.msg_type != 'whisper')
-    ORDER BY m.created_at DESC LIMIT 6
-  `).all(roomType, roomId, HELPER_USER_ID);
-
-  const seen = new Set();
-  const combined = [];
-  for (const r of chatRecent) { seen.add(r.created_at + ':' + r.sender_id); combined.push(r); }
-  for (const r of helperRecent) {
-    const key = r.created_at + ':' + r.sender_id;
-    if (!seen.has(key)) { seen.add(key); combined.push(r); }
+/** Compact older conversation history into one running summary via
+ *  DeepSeek. On any failure returns the previous summary unchanged so a
+ *  compaction hiccup never loses history permanently. */
+async function compactConversation(prevSummary, newerText) {
+  if (!DEEPSEEK_API || !newerText) return prevSummary || '';
+  const headers = { 'Content-Type': 'application/json' };
+  if (process.env.DEEPSEEK_KEY) headers['Authorization'] = `Bearer ${process.env.DEEPSEEK_KEY}`;
+  try {
+    const res = await deepseekFetch({
+      url: DEEPSEEK_API,
+      headers,
+      body: {
+        model: 'deepseek-chat',
+        max_tokens: 700,
+        temperature: 0.3,
+        stream: false,
+        messages: [
+          { role: 'system', content: 'You compact chat history for a chat-app helper named Venory. Merge the previous summary with the newer messages into ONE concise running summary (max 600 tokens, plain prose, no headers). Preserve: who the users are, what they asked, ongoing topics, decisions, and any open requests. Do not invent anything.' },
+          { role: 'user', content: `Previous summary:\n${prevSummary || '(none)'}\n\nNewer messages to fold in:\n${newerText}` },
+        ],
+      },
+      maxAttempts: 2,
+      baseDelayMs: 300,
+      maxDelayMs: 3000,
+      tag: 'helper-compact',
+    });
+    const text = res?.ok ? (res.data?.choices?.[0]?.message?.content || '') : '';
+    if (text && text.trim()) return text.trim();
+    console.warn('[helper-compact] empty summary reply; keeping previous summary');
+  } catch (err) {
+    console.warn('[helper-compact] summarization failed:', err?.message || err);
   }
-  combined.sort((a, b) => a.created_at - b.created_at);
+  return prevSummary || '';
+}
 
-  const msgs = [{ role: 'system', content: helperSystemPrompt(roomType) }];
-  for (const r of combined) {
+async function buildHelperContext(triggerMsg, roomType, roomId) {
+  // Unlimited message access: everything in the room is fair game for
+  // context (including group-chat messages that never mentioned @helper),
+  // bounded only by a token budget. Over budget, older messages are
+  // COMPACTED into a persisted running summary instead of being cleared.
+  const roomKey = `${roomType}:${roomId}`;
+  const sumRow = db.prepare('SELECT summary, through_created_at FROM helper_context_summaries WHERE room_key = ?').get(roomKey);
+  const through = sumRow?.through_created_at ?? 0;
+  const allRows = db.prepare(`
+    SELECT m.content, m.sender_id, m.msg_type, m.created_at, u.username, u.display_name
+    FROM messages m LEFT JOIN users u ON u.id = m.sender_id
+    WHERE m.room_type = ? AND m.room_id = ?
+      AND m.created_at > ?
+      AND m.recalled_at IS NULL AND m.deleted_by_admin = 0
+      AND (m.msg_type IS NULL OR m.msg_type != 'whisper')
+    ORDER BY m.created_at ASC LIMIT ?
+  `).all(roomType, roomId, through, HELPER_CONTEXT_MAX_ROWS);
+
+  // Format once; group messages get a [name] prefix, DMs don't.
+  const formatted = allRows.map((r) => {
     const text = formatMessageForLLM(r);
-    if (r.sender_id === HELPER_USER_ID) {
-      msgs.push({ role: 'assistant', content: text });
-    } else {
-      const name = r.display_name || r.username || 'User';
-      // Even in DMs we include the user's display name once at the start so
-      // the bot can address the human by name and won't get confused if the
-      // conversation contains references to other people.
-      msgs.push({ role: 'user', content: roomType === 'dm' ? text : `[${name}]: ${text}` });
+    if (!text) return null;
+    const isHelper = r.sender_id === HELPER_USER_ID;
+    const name = r.display_name || r.username || 'User';
+    return {
+      created_at: r.created_at,
+      role: isHelper ? 'assistant' : 'user',
+      content: isHelper || roomType === 'dm' ? text : `[${name}]: ${text}`,
+    };
+  }).filter(Boolean);
+
+  const summaryText0 = sumRow?.summary || '';
+  const totalTokens = (summaryText0 ? estimateTokens(summaryText0) : 0)
+    + formatted.reduce((acc, m) => acc + estimateTokens(m.content), 0);
+
+  let summaryText = summaryText0;
+  let keep = formatted;
+  if (totalTokens > HELPER_CONTEXT_TOKEN_BUDGET) {
+    // Keep the newest messages verbatim; compact everything older.
+    let keepTokens = 0;
+    let keepStart = formatted.length;
+    for (let i = formatted.length - 1; i >= 0; i--) {
+      const t = estimateTokens(formatted[i].content);
+      if (keepTokens + t > HELPER_CONTEXT_KEEP_TOKENS) break;
+      keepTokens += t;
+      keepStart = i;
+    }
+    const older = formatted.slice(0, keepStart);
+    keep = formatted.slice(keepStart);
+    if (older.length) {
+      const compactText = older.map((m) => `${m.role === 'assistant' ? 'Venory' : '[user]'}: ${m.content}`).join('\n');
+      const newSummary = await compactConversation(summaryText, compactText);
+      if (newSummary && newSummary !== summaryText0) {
+        summaryText = newSummary;
+        db.prepare(`INSERT INTO helper_context_summaries (room_key, summary, through_created_at, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(room_key) DO UPDATE SET summary=excluded.summary, through_created_at=excluded.through_created_at, updated_at=excluded.updated_at`)
+          .run(roomKey, newSummary, older[older.length - 1].created_at, Date.now());
+      }
     }
   }
+
+  const msgs = [{ role: 'system', content: helperSystemPrompt(roomType) }];
+  if (summaryText) {
+    msgs.push({ role: 'user', content: `[EARLIER CONVERSATION (compacted summary)]:\n${summaryText}` });
+  }
+  for (const m of keep) msgs.push({ role: m.role, content: m.content });
 
   // Anti-drift sentinel: weaker models (deepseek-chat) sometimes pick up the
   // last assistant turn and just continue the same topic, ignoring the new
@@ -1586,14 +1651,7 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
       console.warn('[helper-bot] no DeepSeek endpoint configured; helper AI disabled');
       return;
     }
-    let maxMessages = 14;
-    if (roomType === 'dm' && userId) {
-      const userRow = db.prepare('SELECT memory_message_length FROM users WHERE id = ?').get(userId);
-      if (userRow && userRow.memory_message_length && userRow.memory_message_length > 0) {
-        maxMessages = Math.max(1, Math.min(100, userRow.memory_message_length));
-      }
-    }
-    const messages = buildHelperContext(content, roomType, roomId, maxMessages);
+    const messages = await buildHelperContext(content, roomType, roomId);
     const headers = { 'Content-Type': 'application/json' };
     if (process.env.DEEPSEEK_KEY) {
       headers['Authorization'] = `Bearer ${process.env.DEEPSEEK_KEY}`;

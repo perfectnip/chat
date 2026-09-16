@@ -473,6 +473,23 @@ try {
   console.error('[db migrate] banned_emails migration failed:', err?.message || err);
 }
 
+// Helper bot running context summaries: per-room compacted history so the
+// basic Venory keeps long conversations within its token budget without
+// dropping (clearing) older messages. `through_created_at` is the created_at
+// of the newest message folded into the summary.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS helper_context_summaries (
+      room_key TEXT PRIMARY KEY,
+      summary TEXT NOT NULL,
+      through_created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+} catch (err) {
+  console.error('[db migrate] helper_context_summaries migration failed:', err?.message || err);
+}
+
 // Password reset tokens. One token = one reset attempt. Tokens are invalidated
 // either by use, by expiry, or by superseded request (only the most recent
 // outstanding token for a user remains valid).
