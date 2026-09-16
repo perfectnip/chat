@@ -24,7 +24,8 @@
 import { io } from 'socket.io-client';
 import WebSocket from 'ws';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { timingSafeEqual, createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -430,6 +431,72 @@ function gatewayRequestJson(urlStr, headers, body, controller) {
   });
 }
 
+// Files the owner uploads through jchat land on THIS computer so the full
+// assistant can read them directly, and images are also inlined into the
+// gateway message as base64 image_url parts.
+const JCHAT_FILES_DIR = process.env.JCHAT_FILES_DIR || join(homedir(), '.openclaw', 'jchat-files');
+const ATTACH_MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+const ATTACH_INLINE_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/** Download a jchat attachment to ~/.openclaw/jchat-files/. Returns
+ *  { path, bytes, name, mime } | { skipped:true, ... } | null on failure. */
+async function downloadJchatAttachment(att) {
+  const filename = typeof att?.filename === 'string' ? att.filename.trim() : '';
+  if (!filename) return null;
+  const mime = typeof att?.mime === 'string' && att.mime ? att.mime : 'application/octet-stream';
+  const sizeBytes = Number(att?.sizeBytes || 0);
+  const name = String(att?.originalName || filename).replace(/[^\w.\-() ]+/g, '_').slice(0, 120) || 'file';
+  if (sizeBytes > ATTACH_MAX_DOWNLOAD_BYTES) return { skipped: true, name, mime, sizeBytes };
+  try {
+    mkdirSync(JCHAT_FILES_DIR, { recursive: true });
+    const url = `${JCHAT_URL}/uploads/${encodeURIComponent(filename)}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(120000) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > ATTACH_MAX_DOWNLOAD_BYTES) return { skipped: true, name, mime, sizeBytes };
+    const path = join(JCHAT_FILES_DIR, `${Date.now()}-${name}`);
+    writeFileSync(path, buf);
+    log('attachment saved:', path, buf.length, 'bytes');
+    return { path, bytes: buf.length, name, mime };
+  } catch (err) {
+    log('attachment download failed:', err.message);
+    return null;
+  }
+}
+
+/** Build the user message for a task, including any jchat attachment: the
+ *  file is downloaded to the owner's computer and images are inlined. */
+async function buildTaskUserMessage(task, content) {
+  const att = task?.attachment;
+  if (!att || typeof att?.filename !== 'string' || !att.filename.trim()) {
+    return { role: 'user', content };
+  }
+  // Caption = task content minus any embedded "/file <id>" refs and the
+  // /think directive (the gateway strips it from plain strings; for
+  // multimodal parts we keep the text clean ourselves).
+  const caption = String(content || '')
+    .replace(/^\s*\/think:[a-z]+\s*\n*\s*/i, '')
+    .replace(/(^|\s)\/file\s+\S+/gi, ' ')
+    .trim();
+  const saved = await downloadJchatAttachment(att);
+  const note = `[User attached a file: ${saved?.name || att.originalName || att.filename}${att.sizeBytes ? `, ${att.sizeBytes} bytes` : ''}]`;
+  const isImage = /^image\/(png|jpe?g|webp|gif)$/i.test(saved?.mime || att.mime || '');
+  if (saved?.path && isImage && saved.bytes > 0 && saved.bytes <= ATTACH_INLINE_IMAGE_BYTES) {
+    const b64 = readFileSync(saved.path).toString('base64');
+    return {
+      role: 'user',
+      content: [
+        { type: 'text', text: [caption, `${note} — also saved on your computer at ${saved.path}.`].filter(Boolean).join('\n\n') },
+        { type: 'image_url', image_url: { url: `data:${saved.mime};base64,${b64}` } },
+      ],
+    };
+  }
+  const extra = saved?.path
+    ? ` The file was downloaded to your computer at ${saved.path} — read it with your file tools.`
+    : (saved?.skipped ? ' It was too large to download automatically.' : ' The file could not be downloaded (unavailable).');
+  return { role: 'user', content: [caption, note + extra].filter(Boolean).join('\n\n') || (note + extra) };
+}
+
 async function runAgentOnce(task, controller) {
   const headers = {
     'Content-Type': 'application/json',
@@ -445,13 +512,14 @@ async function runAgentOnce(task, controller) {
     content = `/think:${task.effort}\n\n${content}`;
   }
   const sessionKey = resolveTaskSessionKey(task);
+  const userMessage = await buildTaskUserMessage(task, content);
   const payload = {
     model: MODEL,
     // System message → merged into the agent's system prompt by the gateway,
     // invisible in the user-visible chat/session history.
     messages: [
       { role: 'system', content: MESSAGE_SOURCE_NOTE },
-      { role: 'user', content },
+      userMessage,
     ],
     stream: false,
   };

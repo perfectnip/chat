@@ -2001,6 +2001,25 @@ async function routeViaOpenClawBridge(triggerMsgId, content, convId, agentOpts, 
   }, OPENCLAW_BRIDGE_TIMEOUT_MS);
   openclawBridgeTasks.set(taskId, { resolve: resolveTask, timer, convId });
 
+  // Attachments: look up the trigger message's upload ref so the bridge can
+  // download the file from jchat and hand it to the full assistant on the
+  // owner's computer (and inline images into the gateway message).
+  let attachment;
+  try {
+    const ref = db.prepare(`SELECT filename, mime_type, size_bytes, original_name
+      FROM upload_refs WHERE message_id = ? ORDER BY created_at DESC LIMIT 1`).get(triggerMsgId);
+    if (ref?.filename) {
+      attachment = {
+        filename: String(ref.filename),
+        mime: String(ref.mime_type || 'application/octet-stream'),
+        sizeBytes: Number(ref.size_bytes || 0),
+        originalName: String(ref.original_name || ref.filename),
+      };
+    }
+  } catch (err) {
+    console.warn('[helper-bot] attachment lookup failed:', err?.message || err);
+  }
+
   try {
     io.to('bridge:openclaw').emit('helper:task', {
       taskId,
@@ -2012,6 +2031,7 @@ async function routeViaOpenClawBridge(triggerMsgId, content, convId, agentOpts, 
       model: agentOpts?.model || undefined,
       effort: agentOpts?.effort || undefined,
       agentSession: taskAgentSession,
+      attachment: attachment || undefined,
     });
     const result = await taskPromise;
     if (result.kind === 'reply' && result.text && result.text.trim()) {
