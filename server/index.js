@@ -1792,7 +1792,7 @@ app.use((req, res, next) => {
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token, X-Requested-With');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token, X-Requested-With, X-Turnstile-Token, X-Recaptcha-Token');
       res.setHeader('Access-Control-Max-Age', '86400');
     }
   }
@@ -2271,6 +2271,92 @@ app.post('/internal/send-push', express.json({ limit: '64kb' }), (req, res) => {
 });
 app.use('/api/saves', savesRoutes);
 app.use('/api/reports', reportsRoutes);
+
+// DeepSeek streaming proxy for the games site's Venory AI chat
+// (perfectnip.github.io). The client is a static page and can't hold a
+// key, so it posts here and we stream the DeepSeek SSE response through.
+// Billing/subscription stays on the Cloudflare Worker; only the chat moved
+// off the rate-limited worker onto this server (which holds DEEPSEEK_KEY).
+//
+// Security (public endpoint, so gated):
+//   1. Origin must be an allow-listed site (CORS_ALLOW_LIST) — blocks other
+//      websites and non-browser clients.
+//   2. In-memory per-IP rate limit.
+//   3. Optional reCAPTCHA v3 — verified only when VENORY_RECAPTCHA_SECRET is
+//      set (the games site's reCAPTCHA key, distinct from this app's own).
+const aiChatRate = new Map(); // ip -> { count, windowStart }
+
+async function verifyVenoryRecaptcha(secret, token, minScore) {
+  if (!secret || !token) return false;
+  try {
+    const r = await fetch('https://www.google.com/recaptcha/api/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ secret, response: token }),
+    });
+    const d = await r.json();
+    return !!(d && d.success === true && (typeof d.score !== 'number' || d.score >= (minScore || 0.5)));
+  } catch {
+    return false;
+  }
+}
+
+app.post('/api/ai/chat', async (req, res) => {
+  // 1. Origin allow-list
+  const origin = req.headers.origin || '';
+  const allowed = CORS_ALLOW_LIST.has(origin) || /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?$/i.test(origin);
+  if (!allowed) return res.status(403).json({ error: 'origin not allowed' });
+
+  // 2. Per-IP rate limit (30 req/min)
+  const ip = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
+  const now = Date.now();
+  const lim = aiChatRate.get(ip) || { count: 0, windowStart: now };
+  if (now - lim.windowStart > 60000) { lim.count = 0; lim.windowStart = now; }
+  lim.count++;
+  aiChatRate.set(ip, lim);
+  if (lim.count > 30) return res.status(429).json({ error: 'rate limited' });
+
+  // 3. Optional reCAPTCHA v3
+  const recaptchaSecret = process.env.VENORY_RECAPTCHA_SECRET || '';
+  if (recaptchaSecret) {
+    const tok = req.headers['x-recaptcha-token'] || '';
+    const ok = await verifyVenoryRecaptcha(recaptchaSecret, tok, 0.5);
+    if (!ok) return res.status(403).json({ error: 'bot check failed' });
+  }
+
+  // 4. DeepSeek key + streaming proxy
+  if (!process.env.DEEPSEEK_KEY) return res.status(503).json({ error: 'AI not configured' });
+  const b = req.body || {};
+  const messages = Array.isArray(b.messages) ? b.messages : [];
+  if (!messages.length) return res.status(400).json({ error: 'messages required' });
+  const model = (typeof b.model === 'string' && b.model) ? b.model : 'deepseek-chat';
+  const payload = { model, messages, stream: b.stream !== false };
+  if (typeof b.temperature === 'number') payload.temperature = b.temperature;
+  if (typeof b.max_tokens === 'number') payload.max_tokens = b.max_tokens;
+
+  fetch('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.DEEPSEEK_KEY}` },
+    body: JSON.stringify(payload),
+  }).then((upRes) => {
+    if (!upRes.ok) {
+      return upRes.text().then((t) => res.status(upRes.status).type('application/json').send(t || '{"error":"upstream"}'));
+    }
+    res.status(200);
+    res.setHeader('Content-Type', upRes.headers.get('content-type') || 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (upRes.body && typeof Readable.fromWeb === 'function') {
+      Readable.fromWeb(upRes.body).pipe(res);
+    } else {
+      upRes.arrayBuffer().then((buf) => res.end(Buffer.from(buf)));
+    }
+    req.on('close', () => { try { upRes.body && upRes.body.cancel(); } catch (_) {} });
+  }).catch((err) => {
+    if (!res.headersSent) res.status(502).json({ error: 'upstream error' });
+    else res.end();
+  });
+});
 
 /** Active timeouts for the signed-in user (used by client UI to show hints). */
 app.get('/api/my/timeouts', requireAuth, (req, res) => {
