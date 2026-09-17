@@ -7980,3 +7980,48 @@ input[type="checkbox"]:checked::after {
   font-size: 0.72rem;
   color: #f87171;
 }
+
+/* Tab cloak picker (settings > general) */
+.cloak-icon-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+  align-items: center;
+}
+.cloak-icon-opt {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 4px;
+  box-sizing: border-box;
+  object-fit: contain;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.cloak-icon-opt:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: scale(1.06);
+}
+.cloak-icon-opt.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(192, 132, 252, 0.35);
+}
+.cloak-upload-zone {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  opacity: 0.9;
+  transition: opacity 0.12s ease, border-color 0.12s ease;
+}
+.cloak-upload-zone:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+  opacity: 1;
+}

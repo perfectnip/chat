@@ -50,6 +50,9 @@ let state = {
   commandMode: true, // commands are always on; toggle UI removed.
   uiAnimations: typeof localStorage !== 'undefined' ? localStorage.getItem('uiAnimations') !== '0' : true,
   enterToSend: typeof localStorage !== 'undefined' ? localStorage.getItem('enter_to_send') === '1' : false,
+  cloakEnabled: typeof localStorage !== 'undefined' ? localStorage.getItem('jchatCloak') === 'true' : false,
+  cloakTitle: typeof localStorage !== 'undefined' ? (localStorage.getItem('jchatCloakTitle') || 'Inbox - Gmail') : 'Inbox - Gmail',
+  cloakIcon: typeof localStorage !== 'undefined' ? (localStorage.getItem('jchatCloakIcon') || '/cloak-images/gmail.png') : '/cloak-images/gmail.png',
   notificationPrefs: null,
   pushActive: false,
   drafts: {},
@@ -11744,6 +11747,27 @@ const LANGUAGE_OPTIONS = [
   { value: 'de', label: 'Deutsch' },
 ];
 
+function buildCloakIconGrid(currentVal) {
+  const icons = (window.JchatCloak && window.JchatCloak.icons) || [
+    { name: 'Default', src: '/cloak-images/default.png' },
+    { name: 'Docs', src: '/cloak-images/docs.png' },
+    { name: 'Sheets', src: '/cloak-images/sheets.png' },
+    { name: 'Drive', src: '/cloak-images/drive.png' },
+    { name: 'Forms', src: '/cloak-images/forms.png' },
+    { name: 'Gmail', src: '/cloak-images/gmail.png' },
+    { name: 'Google', src: '/cloak-images/google.png' },
+    { name: 'PAUSD', src: '/cloak-images/pausd.png' },
+    { name: 'Schoology', src: '/cloak-images/schoology.png' },
+  ];
+  const custom = /^data:image\//.test(currentVal || '')
+    ? `<img class="cloak-icon-opt active cloak-icon-custom" src="${escapeHtml(currentVal)}" title="Custom" alt="Custom" draggable="false" />`
+    : '';
+  return custom + icons.map((ic) => {
+    const active = currentVal === ic.src;
+    return `<img class="cloak-icon-opt${active ? ' active' : ''}" src="${ic.src}" title="${escapeHtml(ic.name)}" data-cloak-src="${escapeHtml(ic.src)}" alt="${escapeHtml(ic.name)}" draggable="false" />`;
+  }).join('') + `<div class="cloak-upload-zone" id="settings-cloak-upload"><span>${tx('cloakCustomIcon', 'Custom Icon')}</span><input type="file" accept="image/*" style="display:none" /></div>`;
+}
+
 function renderSettingsContent() {
   const tab = new URLSearchParams(window.location.search || '').get('tab') || 'profile';
   return `
@@ -11782,6 +11806,15 @@ function renderSettingsContent() {
           <input type="checkbox" id="settings-enter-to-send" ${state.enterToSend ? 'checked' : ''} />
           <span>${tx('enterToSendLabel', 'Enter key sends message')}</span>
         </label>
+        <h3 class="settings-section-title">${tx('tabCloakTitle', 'Tab Cloak')}</h3>
+        <p class="settings-account-desc">${tx('tabCloakDesc', 'Change the browser tab title and icon to look like a different site.')}</p>
+        <label class="settings-checkbox-label">
+          <input type="checkbox" id="settings-cloak-enabled" ${state.cloakEnabled ? 'checked' : ''} />
+          <span>${tx('tabCloakEnable', 'Enable tab cloak')}</span>
+        </label>
+        <label class="settings-form-label">${tx('tabCloakTabTitle', 'Tab title')}</label>
+        <input type="text" id="settings-cloak-title" value="${escapeHtml(state.cloakTitle)}" placeholder="Inbox - Gmail" style="width:100%;margin-bottom:6px" />
+        <div class="cloak-icon-grid" id="settings-cloak-icons">${buildCloakIconGrid(state.cloakIcon)}</div>
           </div>
       ` : ''}
       ${tab === 'profile' ? `
@@ -12915,6 +12948,45 @@ function bindSettings() {
   document.getElementById('settings-enter-to-send')?.addEventListener('change', (e) => {
     state.enterToSend = !!e.target.checked;
     if (typeof localStorage !== 'undefined') localStorage.setItem('enter_to_send', state.enterToSend ? '1' : '0');
+  });
+  const applyCloakLive = () => { if (window.JchatCloak) window.JchatCloak.apply(); };
+  document.getElementById('settings-cloak-enabled')?.addEventListener('change', (e) => {
+    state.cloakEnabled = !!e.target.checked;
+    if (typeof localStorage !== 'undefined') localStorage.setItem('jchatCloak', state.cloakEnabled ? 'true' : 'false');
+    applyCloakLive();
+  });
+  document.getElementById('settings-cloak-title')?.addEventListener('change', (e) => {
+    state.cloakTitle = String(e.target.value || 'Inbox - Gmail');
+    if (typeof localStorage !== 'undefined') localStorage.setItem('jchatCloakTitle', state.cloakTitle);
+    applyCloakLive();
+  });
+  const cloakGrid = document.getElementById('settings-cloak-icons');
+  cloakGrid?.addEventListener('click', (e) => {
+    const img = e.target && e.target.closest ? e.target.closest('img.cloak-icon-opt[data-cloak-src]') : null;
+    if (!img) return;
+    state.cloakIcon = img.dataset.cloakSrc;
+    if (typeof localStorage !== 'undefined') localStorage.setItem('jchatCloakIcon', state.cloakIcon);
+    cloakGrid.querySelectorAll('.cloak-icon-opt').forEach((o) => o.classList.remove('active'));
+    img.classList.add('active');
+    applyCloakLive();
+  });
+  const cloakUpload = document.getElementById('settings-cloak-upload');
+  cloakUpload?.addEventListener('click', (e) => {
+    if (e.target && e.target.tagName !== 'INPUT') cloakUpload.querySelector('input')?.click();
+  });
+  cloakUpload?.querySelector('input')?.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      if (!dataUrl) return;
+      state.cloakIcon = dataUrl;
+      if (typeof localStorage !== 'undefined') localStorage.setItem('jchatCloakIcon', dataUrl);
+      applyCloakLive();
+      render();
+    };
+    reader.readAsDataURL(file);
   });
   document.getElementById('notif-enabled')?.addEventListener('change', async (e) => {
     const enabled = !!e.target.checked;
