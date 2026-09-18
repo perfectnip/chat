@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, getCurrentUser, changePassword, canManageUsers } from '../auth.js';
 import { db, GROUP_ID, isEmailBanned, isPrivateUser, canSeePrivateUser, PRIVATE_USER_BLOCKED } from '../db.js';
+import { selectableChatboxStyles } from '../chatbox-styles.js';
 import { upload } from '../upload.js';
 
 const router = Router();
@@ -119,6 +120,11 @@ router.patch('/profile', requireAuth, upload.single('avatar'), (req, res) => {
   const links = profile_links != null ? (typeof profile_links === 'string' ? profile_links : JSON.stringify(profile_links)) : null;
   const desc = description !== undefined ? (typeof description === 'string' ? description.trim().slice(0, 1024) : null) : undefined;
   const cbStyle = typeof chatbox_style === 'string' ? chatbox_style.trim().slice(0, 64) : null;
+  // Chatbox style gate: only styles the requesting user may select are
+  // accepted (experimental styles are jimmyqrg-only while in testing).
+  if (cbStyle !== null && !selectableChatboxStyles(user).includes(cbStyle)) {
+    return res.status(400).json({ error: 'That chatbox style is not available' });
+  }
   // Email is opt-in: only treated as an update when the client explicitly sends
   // the field. An empty string clears it; anything else has to look like an
   // email and not collide with another account. Existing chat accounts that

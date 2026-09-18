@@ -7391,7 +7391,7 @@ function renderMessage(m, roomType, roomId, context = {}) {
   if (isFileMessage) bodyClasses.push('message-body-file');
   if (useSvgBubble) bodyClasses.push('message-body-svg');
   if (useSvgBubble && hasTail) bodyClasses.push('message-body-tail');
-  if (!useSvgBubble && cbStyle !== 'default') bodyClasses.push(`chatbox-${cbStyle}`);
+  if (cbStyle !== 'default') bodyClasses.push(`chatbox-${cbStyle}`);
   if (isWhisper) bodyClasses.push('message-body-whisper');
   const whisperBadge = isWhisper ? `<span class="message-whisper-badge" title="Private message: only you, the recipient, jimmyqrg, and admins with the See whispers permission can see this.">Whisper to @${escapeHtml(recipientUser ? recipientUser.username : (m.recipient_user_id || ''))}</span>` : '';
   return `
@@ -11783,7 +11783,9 @@ function renderSettingsContent() {
         <h3 class="settings-section-title">${tx('chatboxStyle', 'Message Bubble Style')}</h3>
         <p class="settings-account-desc">${tx('chatboxStyleDesc', 'Choose a message bubble style visible to everyone.')}</p>
         <div class="chatbox-picker" id="chatbox-picker">
-          ${(state._chatboxStyles.length ? state._chatboxStyles : [{ id: 'default', name: 'Default' }]).map(s => {
+          ${(state._chatboxStyles.length ? state._chatboxStyles : [{ id: 'default', name: 'Default' }])
+            .filter(s => !s.experimental || (state.user && state.user.username === 'jimmyqrg'))
+            .map(s => {
             const active = (state.user?.chatbox_style || 'default') === s.id;
             return `<button type="button" class="chatbox-picker-item ${active ? 'active' : ''}" data-style="${s.id}" title="${escapeHtml(s.description || '')}">
               <div class="chatbox-picker-preview">

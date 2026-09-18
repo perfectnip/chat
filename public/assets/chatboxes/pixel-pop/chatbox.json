@@ -1,0 +1,9 @@
+{
+  "id": "pixel-pop",
+  "name": "Pixel Pop",
+  "author": "jimmyqrg",
+  "description": "Chunky 8-bit bubble with hard corners and a stepped tail.",
+  "type": "svg",
+  "tail": "true",
+  "files": { "own": "own.svg", "other": "other.svg" }
+}

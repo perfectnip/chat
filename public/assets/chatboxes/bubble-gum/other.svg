@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120" fill="none">
+  <defs>
+    <linearGradient id="bgy" x1="0" y1="0" x2="0" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4F46E5"/><stop offset="1" stop-color="#312E81"/>
+    </linearGradient>
+  </defs>
+  <path d="M13 6H307C312.5 6 317 10.5 317 16V84C317 89.5 312.5 94 307 94H52C47.6 94 44 97.6 44 102V112C44 115.3 41.3 118 38 118H36C29.4 118 24 112.6 24 106V94H13C7.5 94 3 89.5 3 84V16C3 10.5 7.5 6 13 6Z" fill="url(#bgy)" stroke="#818CF8" stroke-width="2" stroke-linejoin="round"/>
+  <ellipse cx="86" cy="34" rx="52" ry="16" fill="white" opacity="0.22" transform="rotate(-12 86 34)"/>
+  <ellipse cx="262" cy="78" rx="30" ry="9" fill="white" opacity="0.10" transform="rotate(-15 262 78)"/>
+</svg>

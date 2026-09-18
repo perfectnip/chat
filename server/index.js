@@ -10,6 +10,7 @@ import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
 import { sessionMiddleware, touchSession, getCurrentUser, requireAuth, canRecallOrEdit, canSendInbox, canBroadcast, canEditDocs, canKick, canDeleteMessages, canTimeout, canUnlimitedEditRecall, canSeeWhispers, tokenAuthMiddleware } from './auth.js';
 import { db, GROUP_ID, PANELS, HELPER_USER_ID, isBlacklisted, isUserDeleted, canSeePrivateUser, PRIVATE_USER_BLOCKED, whisperVisibleClause } from './db.js';
+import { listChatboxStyles } from './chatbox-styles.js';
 import { moderateMessage } from './ai-moderation.js';
 import { deepseekFetch } from './deepseek-client.js';
 import { upload } from './upload.js';
@@ -2354,27 +2355,11 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-/** List available chatbox styles by scanning the chatboxes directory. */
+/** List available chatbox styles by scanning the chatboxes directory.
+ *  Experimental styles carry `experimental: true`; the client hides them
+ *  from the picker for everyone except jimmyqrg (temporary testing). */
 app.get('/api/chatbox-styles', (req, res) => {
-  const dir = join(publicDir, 'assets', 'chatboxes');
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    const styles = entries
-      .filter(e => e.isDirectory() && e.name !== 'default-old')
-      .map(e => {
-        const jsonPath = join(dir, e.name, 'chatbox.json');
-        if (!existsSync(jsonPath)) return null;
-        try {
-          const meta = JSON.parse(readFileSync(jsonPath, 'utf8'));
-          return { id: e.name, name: meta.name || e.name, type: meta.type || 'svg', tail: meta.tail === 'true' || meta.tail === true, author: meta.author || null, description: meta.description || null };
-        } catch { return null; }
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.name.localeCompare(b.name));
-    res.json({ styles });
-  } catch {
-    res.json({ styles: [] });
-  }
+  res.json({ styles: listChatboxStyles() });
 });
 
 /* ── /joke: random line from server/jokes.txt ─────────────────────────

@@ -8039,3 +8039,12 @@ input[type="checkbox"]:checked::after {
   border-color: rgba(255, 255, 255, 0.45);
   opacity: 1;
 }
+
+/* ── Experimental chatbox text overrides ── */
+.message-body.chatbox-sticky-note {
+  color: #3f2a06;
+  --text-dim: #8a6a1f;
+}
+.message-body.chatbox-sticky-note .message-content a {
+  color: #92400e;
+}

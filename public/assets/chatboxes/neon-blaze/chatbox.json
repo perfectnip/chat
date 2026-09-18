@@ -1,0 +1,9 @@
+{
+  "id": "neon-blaze",
+  "name": "Neon Blaze",
+  "author": "jimmyqrg",
+  "description": "Dark bubble with a hot neon gradient edge and glow.",
+  "type": "svg",
+  "tail": "true",
+  "files": { "own": "own.svg", "other": "other.svg" }
+}
