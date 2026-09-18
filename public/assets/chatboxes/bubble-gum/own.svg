@@ -1,10 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120" fill="none" preserveAspectRatio="none">
   <defs>
     <linearGradient id="bgx" x1="0" y1="0" x2="0" y2="120" gradientUnits="userSpaceOnUse">
       <stop stop-color="#F472B6"/><stop offset="1" stop-color="#BE185D"/>
     </linearGradient>
   </defs>
-  <path d="M307 6H13C7.5 6 3 10.5 3 16V84C3 89.5 7.5 94 13 94H268C272.4 94 276 97.6 276 102V112C276 115.3 278.7 118 282 118H284C290.6 118 296 112.6 296 106V94H307C312.5 94 317 89.5 317 84V16C317 10.5 312.5 6 307 6Z" fill="url(#bgx)" stroke="#F9A8D4" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M276 97L294 97L285 114L276 97Z" fill="url(#bgx)" stroke="#F9A8D4" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M307 5H13C7.5 5 3 9.5 3 15V85C3 90.5 7.5 95 13 95H307C312.5 95 317 90.5 317 85V15C317 9.5 312.5 5 307 5Z" fill="url(#bgx)" stroke="#F9A8D4" stroke-width="2" stroke-linejoin="round"/>
   <ellipse cx="86" cy="34" rx="52" ry="16" fill="white" opacity="0.35" transform="rotate(-12 86 34)"/>
   <ellipse cx="262" cy="78" rx="30" ry="9" fill="white" opacity="0.15" transform="rotate(-15 262 78)"/>
 </svg>

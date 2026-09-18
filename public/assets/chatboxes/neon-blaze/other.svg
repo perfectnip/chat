@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120" fill="none" preserveAspectRatio="none">
   <defs>
     <linearGradient id="nby" x1="0" y1="0" x2="320" y2="120" gradientUnits="userSpaceOnUse">
       <stop stop-color="#00E5FF"/><stop offset="1" stop-color="#7C3AED"/>
@@ -7,7 +7,8 @@
       <stop stop-color="#0B1220"/><stop offset="1" stop-color="#060A14"/>
     </linearGradient>
   </defs>
-  <path d="M13 3H307C312.5 3 317 7.5 317 13V89C317 94.5 312.5 99 307 99H42L23 117V99H13C7.5 99 3 94.5 3 89V13C3 7.5 7.5 3 13 3Z" fill="url(#nbf2)" stroke="url(#nby)" stroke-width="2" stroke-linejoin="round"/>
-  <path d="M13 3H307C312.5 3 317 7.5 317 13V89C317 94.5 312.5 99 307 99H42L23 117V99H13C7.5 99 3 94.5 3 89V13C3 7.5 7.5 3 13 3Z" stroke="url(#nby)" stroke-width="6" opacity="0.22" stroke-linejoin="round"/>
+  <path d="M26 97L44 97L35 114L26 97Z" fill="url(#nbf2)" stroke="url(#nby)" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M13 3H307C312.5 3 317 7.5 317 13V89C317 94.5 312.5 99 307 99H13C7.5 99 3 94.5 3 89V13C3 7.5 7.5 3 13 3Z" fill="url(#nbf2)" stroke="url(#nby)" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M13 3H307C312.5 3 317 7.5 317 13V89C317 94.5 312.5 99 307 99H13C7.5 99 3 94.5 3 89V13C3 7.5 7.5 3 13 3Z" stroke="url(#nby)" stroke-width="6" opacity="0.22" stroke-linejoin="round"/>
   <path d="M12 10C12 8.4 13.4 7 15 7H305C306.6 7 308 8.4 308 10V18H12V10Z" fill="white" opacity="0.05"/>
 </svg>
