@@ -11813,7 +11813,7 @@ function renderSettingsContent() {
           <span>${tx('tabCloakEnable', 'Enable tab cloak')}</span>
         </label>
         <label class="settings-form-label">${tx('tabCloakTabTitle', 'Tab title')}</label>
-        <input type="text" id="settings-cloak-title" value="${escapeHtml(state.cloakTitle)}" placeholder="Inbox - Gmail" style="width:100%;margin-bottom:6px" />
+        <input type="text" id="settings-cloak-title" class="settings-text-input" value="${escapeHtml(state.cloakTitle)}" placeholder="Inbox - Gmail" />
         <div class="cloak-icon-grid" id="settings-cloak-icons">${buildCloakIconGrid(state.cloakIcon)}</div>
           </div>
       ` : ''}

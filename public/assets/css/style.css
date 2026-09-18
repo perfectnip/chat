@@ -3918,10 +3918,24 @@ select:focus {
 }
 
 .settings-form input:focus,
-.settings-form textarea:focus {
+.settings-form textarea:focus,
+.settings-text-input:focus {
   outline: none;
   border-color: var(--purple);
   box-shadow: 0 0 0 2px var(--glow);
+}
+
+.settings-text-input {
+  width: 100%;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  border: var(--border-width) solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-main);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .settings-avatar-drop-zone {
