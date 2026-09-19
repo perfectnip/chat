@@ -26,6 +26,7 @@ import notificationsRoutes, { getPrefs as getNotificationPrefs } from './routes/
 import { maybePushForMessage, maybePushForMention, sendRawPush } from './webpush.js';
 import savesRoutes from './routes/saves.js';
 import reportsRoutes from './routes/reports.js';
+import anniversaryRoutes from './routes/anniversary.js';
 import { recordAuditLog } from './audit.js';
 import { recordUploadRef, markUploadOrphan } from './uploads-tracker.js';
 import { findMentionUserIds, MENTION_INCLUDES_ALL_RE, MENTION_INCLUDES_ADMINS_RE } from './mentions.js';
@@ -2573,6 +2574,7 @@ app.post('/internal/send-push', express.json({ limit: '64kb' }), (req, res) => {
 });
 app.use('/api/saves', savesRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/anniversary', anniversaryRoutes);
 
 // DeepSeek streaming proxy for the games site's Venory AI chat
 // (perfectnip.github.io). The client is a static page and can't hold a
