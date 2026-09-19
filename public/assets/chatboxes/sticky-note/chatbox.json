@@ -3,7 +3,10 @@
   "name": "Sticky Note",
   "author": "jimmyqrg",
   "description": "A yellow sticky note with a folded corner and ink-dark text.",
-  "type": "svg",
+  "type": "css",
   "tail": "false",
-  "files": { "own": "own.svg", "other": "other.svg" }
+  "files": {
+    "own": "own.svg",
+    "other": "other.svg"
+  }
 }
