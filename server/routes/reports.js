@@ -364,7 +364,7 @@ router.get('/:id/context', requireAuth, (req, res) => {
   const focus = db.prepare(`
     SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.reply_to_id,
            m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at, m.recipient_user_id,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style
+           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.id = ?
@@ -383,7 +383,7 @@ router.get('/:id/context', requireAuth, (req, res) => {
   const before = db.prepare(`
     SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.reply_to_id,
            m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style
+           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.room_type = ? AND m.room_id = ?
@@ -396,7 +396,7 @@ router.get('/:id/context', requireAuth, (req, res) => {
   const after = db.prepare(`
     SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.reply_to_id,
            m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style
+           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.room_type = ? AND m.room_id = ?

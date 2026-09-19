@@ -7199,6 +7199,16 @@ function parseFileRef(content, msgType) {
   return null;
 }
 
+/** Pick a readable text color (dark or light) for a #rrggbb background. */
+function textColorForBg(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return '#ffffff';
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.62 ? '#241c3d' : '#ffffff';
+}
+
 function isFileMessage(m) {
   return !!parseFileRef(m.content, m.msg_type);
 }
@@ -7393,6 +7403,11 @@ function renderMessage(m, roomType, roomId, context = {}) {
   if (useSvgBubble && hasTail) bodyClasses.push('message-body-tail');
   if (cbStyle !== 'default') bodyClasses.push(`chatbox-${cbStyle}`);
   if (isWhisper) bodyClasses.push('message-body-whisper');
+  const isCustomColor = cbStyle === 'custom' && /^#[0-9a-fA-F]{6}$/.test(m.chatbox_color || '');
+  const bubbleVars = isCustomColor
+    ? `--bubble-color:${m.chatbox_color};--bubble-text:${textColorForBg(m.chatbox_color)};`
+    : '';
+  const bodyStyle = [useSvgBubble ? `--bubble-svg:url('${cbSvg}')` : '', bubbleVars].filter(Boolean).join(';');
   const whisperBadge = isWhisper ? `<span class="message-whisper-badge" title="Private message: only you, the recipient, jimmyqrg, and admins with the See whispers permission can see this.">Whisper to @${escapeHtml(recipientUser ? recipientUser.username : (m.recipient_user_id || ''))}</span>` : '';
   return `
     <div class="message-row ${isWhisper ? 'message-row-whisper' : ''}" data-msg-id="${m.id}">
@@ -7402,7 +7417,7 @@ function renderMessage(m, roomType, roomId, context = {}) {
           <div class="message-avatar-wrap" data-sender-id="${escapeHtml(m.sender_id || '')}" title="View profile" role="button" tabindex="0">
             <img class="message-avatar" src="${avatarSrc}" data-fallback="${defaultAvatar.replace(/"/g, '&quot;')}" onerror="this.onerror=null;if(this.dataset.fallback)this.src=this.dataset.fallback" alt="" />
           </div>
-          <div class="${bodyClasses.join(' ')}"${useSvgBubble ? ` style="--bubble-svg:url('${cbSvg}')"` : ''}>
+          <div class="${bodyClasses.join(' ')}"${bodyStyle ? ` style="${bodyStyle}"` : ''}>
             ${replyBlock}
             ${contentBlock}
             ${reactionSummary ? `<div class="message-reactions">${reactionSummary}</div>` : ''}
@@ -11784,11 +11799,11 @@ function renderSettingsContent() {
         <p class="settings-account-desc">${tx('chatboxStyleDesc', 'Choose a message bubble style visible to everyone.')}</p>
         <div class="chatbox-picker" id="chatbox-picker">
           ${(state._chatboxStyles.length ? state._chatboxStyles : [{ id: 'default', name: 'Default' }])
-            .filter(s => !s.experimental || (state.user && state.user.username === 'jimmyqrg'))
+            .filter(s => (!s.experimental || (state.user && state.user.username === 'jimmyqrg')) && (s.id !== 'custom' || !!(state.user && state.user.premium_plus)))
             .map(s => {
             const active = (state.user?.chatbox_style || 'default') === s.id;
-            const preview = s.type === 'css' && s.id !== 'default'
-              ? `<div class="chatbox-preview-bubble chatbox-preview-css message-body chatbox-${s.id}">Aa</div>`
+            const preview = s.id === 'custom'
+              ? `<div class="chatbox-preview-bubble chatbox-preview-own" style="background-color:${escapeHtml(state.user?.chatbox_color || '#8b5cf6')}; border-radius: 10px;"></div>`
               : `<div class="chatbox-preview-bubble chatbox-preview-other" style="background-image: url('/assets/chatboxes/${s.id}/other.svg')"></div>
                 <div class="chatbox-preview-bubble chatbox-preview-own" style="background-image: url('/assets/chatboxes/${s.id}/own.svg')"></div>`;
             return `<button type="button" class="chatbox-picker-item ${active ? 'active' : ''}" data-style="${s.id}" title="${escapeHtml(s.description || '')}">
@@ -11797,6 +11812,12 @@ function renderSettingsContent() {
             </button>`;
           }).join('')}
         </div>
+        ${(state.user?.chatbox_style === 'custom' && state.user?.premium_plus) ? `
+        <label class="settings-form-label">${tx('bubbleColorLabel', 'Bubble color')}</label>
+        <div class="bubble-color-row">
+          <input type="color" id="settings-bubble-color" value="${escapeHtml(state.user?.chatbox_color || '#8b5cf6')}" title="${tx('bubbleColorTitle', 'Pick your bubble color')}" />
+          <input type="text" id="settings-bubble-color-hex" class="settings-text-input" value="${escapeHtml(state.user?.chatbox_color || '#8b5cf6')}" maxlength="7" spellcheck="false" placeholder="#8b5cf6" />
+        </div>` : ''}
         <h3 class="settings-section-title">${tx('uiAnimation', 'UI Animation')}</h3>
         <p class="settings-account-desc">${tx('uiAnimationDesc', 'Enable or disable transitions and animations throughout the interface.')}</p>
         <label class="settings-checkbox-label">
@@ -12934,6 +12955,29 @@ function bindSettings() {
       render();
       bindSettings();
     } catch (_) {}
+  });
+  const bubbleColorInput = document.getElementById('settings-bubble-color');
+  const bubbleHexInput = document.getElementById('settings-bubble-color-hex');
+  const applyBubbleColor = async (hex) => {
+    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return;
+    if (bubbleColorInput) bubbleColorInput.value = hex;
+    if (bubbleHexInput) bubbleHexInput.value = hex;
+    try {
+      const { user } = await apiPatch('/api/users/profile', { chatbox_color: hex });
+      if (state.user) state.user.chatbox_color = user.chatbox_color || null;
+      const prev = document.querySelector('.chatbox-picker-item[data-style="custom"] .chatbox-preview-own');
+      if (prev) prev.style.backgroundColor = hex;
+    } catch (_) {}
+  };
+  bubbleColorInput?.addEventListener('change', (e) => applyBubbleColor(e.target.value));
+  bubbleHexInput?.addEventListener('change', (e) => {
+    let hex = (e.target.value || '').trim();
+    if (hex && !hex.startsWith('#')) hex = '#' + hex;
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      applyBubbleColor(hex);
+    } else if (bubbleColorInput && state.user?.chatbox_color) {
+      bubbleHexInput.value = state.user.chatbox_color;
+    }
   });
   document.getElementById('settings-language')?.addEventListener('change', (e) => {
     const lang = e.target.value;

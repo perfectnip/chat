@@ -8047,6 +8047,8 @@ input[type="checkbox"]:checked::after {
 .message-body.chatbox-sticky-note .message-reply-preview,
 .message-body.chatbox-bubble-gum .message-content,
 .message-body.chatbox-bubble-gum .message-reply-preview,
+.message-body.chatbox-custom .message-content,
+.message-body.chatbox-custom .message-reply-preview,
 .message-body.chatbox-star-gazer .message-content,
 .message-body.chatbox-star-gazer .message-reply-preview {
   color: inherit !important;
@@ -8133,17 +8135,34 @@ input[type="checkbox"]:checked::after {
   pointer-events: none;
 }
 
-/* Settings picker preview for CSS-based chatboxes */
-.chatbox-preview-css {
-  align-self: center;
-  width: 78%;
-  height: 26px;
-  padding: 2px 10px;
+/* Custom Color (Premium Plus) — the color comes from the --bubble-color
+   and --bubble-text custom properties set inline on the message body. */
+.message-body.chatbox-custom {
+  background: var(--bubble-color, #8b5cf6) !important;
+  border: 1.5px solid color-mix(in srgb, var(--bubble-color, #8b5cf6) 60%, white) !important;
+  border-radius: 12px !important;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--bubble-color, #8b5cf6) 25%, transparent),
+    0 2px 16px color-mix(in srgb, var(--bubble-color, #8b5cf6) 45%, transparent) !important;
+  color: var(--bubble-text, #ffffff) !important;
+}
+
+/* Bubble color picker row (Premium Plus, custom style selected) */
+.bubble-color-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  line-height: 1;
-  position: relative;
-  overflow: hidden;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+}
+.bubble-color-row input[type="color"] {
+  width: 44px;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  cursor: pointer;
+}
+.bubble-color-row .settings-text-input {
+  width: 110px;
 }

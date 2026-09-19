@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { randomBytes } from 'node:crypto';
 import { db, validateUsername, isEmailBanned } from './db.js';
+import { isPremiumPlus } from './premium.js';
 import { createSessionStore } from './session-store.js';
 import { resolveToken, extractToken } from './tokens.js';
 
@@ -110,13 +111,15 @@ function normalizeUser(u) {
     can_unlimited_edit_recall: !!u.can_unlimited_edit_recall,
     can_see_whispers: !!u.can_see_whispers,
     chatbox_style: u.chatbox_style || 'default',
+    chatbox_color: typeof u.chatbox_color === 'string' && u.chatbox_color ? u.chatbox_color : null,
+    premium_plus: isPremiumPlus(u.id, u.username),
   };
 }
 
 export function getCurrentUser(req) {
   if (!req.session?.userId) return null;
   try {
-    const u = db.prepare(`SELECT id, username, display_name, avatar_url, chatbox_style, email, description, is_allowed, ${PERM_COLS} FROM users WHERE id = ?`).get(req.session.userId);
+    const u = db.prepare(`SELECT id, username, display_name, avatar_url, chatbox_style, chatbox_color, email, description, is_allowed, ${PERM_COLS} FROM users WHERE id = ?`).get(req.session.userId);
     return normalizeUser(u);
   } catch {
     return null;

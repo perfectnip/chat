@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isPremiumPlus } from './premium.js';
 
 const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -50,7 +51,8 @@ export function listChatboxStyles() {
 
 /** Style ids a given user is allowed to SELECT (not just render). */
 export function selectableChatboxStyles(user) {
+  const premiumPlus = isPremiumPlus(user?.id, user?.username);
   return listChatboxStyles()
-    .filter((s) => !s.experimental || user?.username === 'jimmyqrg')
+    .filter((s) => (!s.experimental || user?.username === 'jimmyqrg') && (s.id !== 'custom' || premiumPlus))
     .map((s) => s.id);
 }

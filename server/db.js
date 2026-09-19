@@ -44,6 +44,7 @@ try { db.exec('ALTER TABLE users ADD COLUMN website TEXT'); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN profile_links TEXT'); } catch (_) {} // JSON array of {label, url}
 try { db.exec('ALTER TABLE users ADD COLUMN description TEXT'); } catch (_) {}
 try { db.exec("ALTER TABLE users ADD COLUMN chatbox_style TEXT DEFAULT 'default'"); } catch (_) {}
+try { db.exec("ALTER TABLE users ADD COLUMN chatbox_color TEXT"); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 
 // Whispers: per-row audience for /whisper messages. The sender is implicit
