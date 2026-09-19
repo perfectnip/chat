@@ -2715,13 +2715,13 @@ select:focus {
 
 /* ── Star Gazer chatbox (CSS-based cosmic bubble) ── */
 .message-body.chatbox-star-gazer {
-  background: linear-gradient(135deg, #4C1D95 0%, #331464 100%);
-  border: 1.5px solid #7C3AED;
-  border-radius: 12px;
+  background: linear-gradient(135deg, #4C1D95 0%, #331464 100%) !important;
+  border: 1.5px solid #7C3AED !important;
+  border-radius: 12px !important;
   box-shadow:
     0 0 0 3px rgba(124, 58, 237, 0.15),
     0 2px 16px rgba(124, 58, 237, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
   position: relative;
   overflow: hidden;
 }
@@ -2732,19 +2732,6 @@ select:focus {
   inset: 0;
   background: url('/assets/chatboxes/star-gazer/other-stars.svg') center / cover no-repeat;
   pointer-events: none;
-}
-
-.message.own .message-body.chatbox-star-gazer {
-  background: linear-gradient(135deg, #4C1D95 0%, #331464 100%);
-  border-color: #8B5CF6;
-  box-shadow:
-    0 0 0 3px rgba(139, 92, 246, 0.15),
-    0 2px 16px rgba(139, 92, 246, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.message.own .message-body.chatbox-star-gazer::before {
-  background-image: url('/assets/chatboxes/star-gazer/own-stars.svg');
 }
 
 /* Chatbox picker in settings */
@@ -8043,63 +8030,63 @@ input[type="checkbox"]:checked::after {
   opacity: 1;
 }
 
-/* ── Experimental chatbox text overrides ── */
-.message-body.chatbox-sticky-note {
-  color: #3f2a06;
-  --text-dim: #8a6a1f;
-}
-.message-body.chatbox-sticky-note .message-content a {
-  color: #92400e;
-}
+/* ── Experimental chatboxes: pure-CSS rendering, ONE look for both
+     sender and receiver (no own/other variants). !important is needed
+     because .message.own / theme rules set background, border, shadow
+     and text color on .message-body with higher specificity. ── */
 
-/* ── Experimental chatboxes: pure-CSS rendering so the bubble scales
-     perfectly with any text length (no image stretching). ── */
+/* Shared: skin text color wins, even in themes that color
+   .message-content / .message-reply-preview directly. */
+.message-body.chatbox-neon-blaze .message-content,
+.message-body.chatbox-neon-blaze .message-reply-preview,
+.message-body.chatbox-aqua-glass .message-content,
+.message-body.chatbox-aqua-glass .message-reply-preview,
+.message-body.chatbox-pixel-pop .message-content,
+.message-body.chatbox-pixel-pop .message-reply-preview,
+.message-body.chatbox-sticky-note .message-content,
+.message-body.chatbox-sticky-note .message-reply-preview,
+.message-body.chatbox-bubble-gum .message-content,
+.message-body.chatbox-bubble-gum .message-reply-preview,
+.message-body.chatbox-star-gazer .message-content,
+.message-body.chatbox-star-gazer .message-reply-preview {
+  color: inherit !important;
+}
 
 /* Neon Blaze */
 .message-body.chatbox-neon-blaze {
-  background: linear-gradient(180deg, #241040 0%, #12061f 100%);
-  border: 1.5px solid #ff2d95;
-  border-radius: 10px;
-  box-shadow: 0 0 0 3px rgba(255, 45, 149, 0.15), 0 2px 16px rgba(255, 138, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  color: #ffe4f2;
-}
-.message:not(.own) .message-body.chatbox-neon-blaze {
-  background: linear-gradient(180deg, #0b1220 0%, #060a14 100%);
-  border-color: #00e5ff;
-  box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.12), 0 2px 16px rgba(124, 58, 237, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, #241040 0%, #12061f 100%) !important;
+  border: 1.5px solid #ff2d95 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 0 0 3px rgba(255, 45, 149, 0.15), 0 2px 16px rgba(255, 138, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+  color: #ffe4f2 !important;
 }
 
 /* Aqua Glass */
 .message-body.chatbox-aqua-glass {
-  background: linear-gradient(180deg, rgba(224, 242, 254, 0.28) 0%, rgba(224, 242, 254, 0.05) 38%, rgba(125, 211, 252, 0.14) 100%);
-  border: 1.5px solid rgba(125, 211, 252, 0.75);
-  border-radius: 10px;
-  color: #e0f2fe;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
-}
-.message:not(.own) .message-body.chatbox-aqua-glass {
-  border-color: rgba(56, 189, 248, 0.7);
+  background: linear-gradient(180deg, rgba(224, 242, 254, 0.28) 0%, rgba(224, 242, 254, 0.05) 38%, rgba(125, 211, 252, 0.14) 100%) !important;
+  border: 1.5px solid rgba(125, 211, 252, 0.75) !important;
+  border-radius: 10px !important;
+  color: #e0f2fe !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25) !important;
 }
 
 /* Pixel Pop */
 .message-body.chatbox-pixel-pop {
-  background: #0f172a;
-  border: 3px solid #22d3ee;
-  border-radius: 0;
-  color: #cffafe;
-  box-shadow: 4px 4px 0 rgba(34, 211, 238, 0.25);
-}
-.message:not(.own) .message-body.chatbox-pixel-pop {
-  border-color: #a78bfa;
-  box-shadow: 4px 4px 0 rgba(167, 139, 250, 0.25);
+  background: #0f172a !important;
+  border: 3px solid #22d3ee !important;
+  border-radius: 0 !important;
+  color: #cffafe !important;
+  box-shadow: 4px 4px 0 rgba(34, 211, 238, 0.25) !important;
 }
 
 /* Sticky Note */
 .message-body.chatbox-sticky-note {
-  background: #fef08a;
-  border: 1.5px solid #d97706;
-  border-radius: 6px;
-  box-shadow: 0 2px 10px rgba(217, 119, 6, 0.25);
+  background: #fef08a !important;
+  border: 1.5px solid #d97706 !important;
+  border-radius: 6px !important;
+  color: #3f2a06 !important;
+  --text-dim: #8a6a1f;
+  box-shadow: 0 2px 10px rgba(217, 119, 6, 0.25) !important;
 }
 .message-body.chatbox-sticky-note::before {
   content: '';
@@ -8123,16 +8110,16 @@ input[type="checkbox"]:checked::after {
   border-left: 15px solid transparent;
   pointer-events: none;
 }
-.message:not(.own) .message-body.chatbox-sticky-note {
-  background: #fde68a;
+.message-body.chatbox-sticky-note .message-content a {
+  color: #92400e !important;
 }
 
 /* Bubble Gum */
 .message-body.chatbox-bubble-gum {
-  background: linear-gradient(180deg, #f472b6 0%, #be185d 100%);
-  border: 1.5px solid #f9a8d4;
-  border-radius: 14px;
-  color: #fce7f3;
+  background: linear-gradient(180deg, #f472b6 0%, #be185d 100%) !important;
+  border: 1.5px solid #f9a8d4 !important;
+  border-radius: 14px !important;
+  color: #fce7f3 !important;
 }
 .message-body.chatbox-bubble-gum::before {
   content: '';
@@ -8145,7 +8132,18 @@ input[type="checkbox"]:checked::after {
   border-radius: 50%;
   pointer-events: none;
 }
-.message:not(.own) .message-body.chatbox-bubble-gum {
-  background: linear-gradient(180deg, #4f46e5 0%, #312e81 100%);
-  border-color: #818cf8;
+
+/* Settings picker preview for CSS-based chatboxes */
+.chatbox-preview-css {
+  align-self: center;
+  width: 78%;
+  height: 26px;
+  padding: 2px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  position: relative;
+  overflow: hidden;
 }

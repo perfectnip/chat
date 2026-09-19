@@ -11787,11 +11787,12 @@ function renderSettingsContent() {
             .filter(s => !s.experimental || (state.user && state.user.username === 'jimmyqrg'))
             .map(s => {
             const active = (state.user?.chatbox_style || 'default') === s.id;
+            const preview = s.type === 'css' && s.id !== 'default'
+              ? `<div class="chatbox-preview-bubble chatbox-preview-css message-body chatbox-${s.id}">Aa</div>`
+              : `<div class="chatbox-preview-bubble chatbox-preview-other" style="background-image: url('/assets/chatboxes/${s.id}/other.svg')"></div>
+                <div class="chatbox-preview-bubble chatbox-preview-own" style="background-image: url('/assets/chatboxes/${s.id}/own.svg')"></div>`;
             return `<button type="button" class="chatbox-picker-item ${active ? 'active' : ''}" data-style="${s.id}" title="${escapeHtml(s.description || '')}">
-              <div class="chatbox-picker-preview">
-                <div class="chatbox-preview-bubble chatbox-preview-other" style="background-image: url('/assets/chatboxes/${s.id}/other.svg')"></div>
-                <div class="chatbox-preview-bubble chatbox-preview-own" style="background-image: url('/assets/chatboxes/${s.id}/own.svg')"></div>
-              </div>
+              <div class="chatbox-picker-preview">${preview}</div>
               <span class="chatbox-picker-label">${escapeHtml(s.name)}</span>
             </button>`;
           }).join('')}
