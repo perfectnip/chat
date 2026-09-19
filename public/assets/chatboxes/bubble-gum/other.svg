@@ -4,7 +4,6 @@
       <stop stop-color="#4F46E5"/><stop offset="1" stop-color="#312E81"/>
     </linearGradient>
   </defs>
-  <path d="M26 97L44 97L35 114L26 97Z" fill="url(#bgy)" stroke="#818CF8" stroke-width="2" stroke-linejoin="round"/>
   <path d="M13 5H307C312.5 5 317 9.5 317 15V85C317 90.5 312.5 95 307 95H13C7.5 95 3 90.5 3 85V15C3 9.5 7.5 5 13 5Z" fill="url(#bgy)" stroke="#818CF8" stroke-width="2" stroke-linejoin="round"/>
   <ellipse cx="86" cy="34" rx="52" ry="16" fill="white" opacity="0.22" transform="rotate(-12 86 34)"/>
   <ellipse cx="262" cy="78" rx="30" ry="9" fill="white" opacity="0.10" transform="rotate(-15 262 78)"/>

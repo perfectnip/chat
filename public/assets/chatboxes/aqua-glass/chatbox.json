@@ -4,6 +4,6 @@
   "author": "jimmyqrg",
   "description": "Frosted translucent cyan bubble with a glassy sheen.",
   "type": "svg",
-  "tail": "true",
+  "tail": "false",
   "files": { "own": "own.svg", "other": "other.svg" }
 }

@@ -4,6 +4,6 @@
   "author": "jimmyqrg",
   "description": "A glossy pink blob with a shiny highlight and a round bubble tail.",
   "type": "svg",
-  "tail": "true",
+  "tail": "false",
   "files": { "own": "own.svg", "other": "other.svg" }
 }

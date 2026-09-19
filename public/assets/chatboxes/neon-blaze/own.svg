@@ -7,7 +7,6 @@
       <stop stop-color="#241040"/><stop offset="1" stop-color="#12061F"/>
     </linearGradient>
   </defs>
-  <path d="M276 97L294 97L285 114L276 97Z" fill="url(#nbf)" stroke="url(#nbx)" stroke-width="2" stroke-linejoin="round"/>
   <path d="M307 3H13C7.5 3 3 7.5 3 13V89C3 94.5 7.5 99 13 99H307C312.5 99 317 94.5 317 89V13C317 7.5 312.5 3 307 3Z" fill="url(#nbf)" stroke="url(#nbx)" stroke-width="2" stroke-linejoin="round"/>
   <path d="M307 3H13C7.5 3 3 7.5 3 13V89C3 94.5 7.5 99 13 99H307C312.5 99 317 94.5 317 89V13C317 7.5 312.5 3 307 3Z" stroke="url(#nbx)" stroke-width="6" opacity="0.22" stroke-linejoin="round"/>
   <path d="M12 10C12 8.4 13.4 7 15 7H305C306.6 7 308 8.4 308 10V18H12V10Z" fill="white" opacity="0.05"/>

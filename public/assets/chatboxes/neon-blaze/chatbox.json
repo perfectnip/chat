@@ -4,6 +4,6 @@
   "author": "jimmyqrg",
   "description": "Dark bubble with a hot neon gradient edge and glow.",
   "type": "svg",
-  "tail": "true",
+  "tail": "false",
   "files": { "own": "own.svg", "other": "other.svg" }
 }
