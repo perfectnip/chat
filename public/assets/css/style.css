@@ -8049,6 +8049,8 @@ input[type="checkbox"]:checked::after {
 .message-body.chatbox-bubble-gum .message-reply-preview,
 .message-body.chatbox-custom .message-content,
 .message-body.chatbox-custom .message-reply-preview,
+.message-body.chatbox-cake-1 .message-content,
+.message-body.chatbox-cake-1 .message-reply-preview,
 .message-body.chatbox-star-gazer .message-content,
 .message-body.chatbox-star-gazer .message-reply-preview {
   color: inherit !important;
@@ -8165,4 +8167,60 @@ input[type="checkbox"]:checked::after {
 }
 .bubble-color-row .settings-text-input {
   width: 110px;
+}
+
+/* Anniversary Cake — first-anniversary birthday cake with a #1 candle,
+   drawn in pure CSS. One look for sender and receiver. */
+.message-body.chatbox-cake-1 {
+  background:
+    radial-gradient(circle at 5px 5px, #ffd166 0 2px, rgba(255, 255, 255, 0) 2.6px) 12px 12px / 26px 22px repeat,
+    radial-gradient(circle at 5px 5px, #7ee8c7 0 2px, rgba(255, 255, 255, 0) 2.6px) 24px 18px / 30px 26px repeat,
+    radial-gradient(circle at 5px 5px, #7aa8ff 0 2px, rgba(255, 255, 255, 0) 2.6px) 18px 8px / 34px 20px repeat,
+    linear-gradient(180deg, #fff9fc 0%, #ffe6f0 100%) !important;
+  border: 1.5px solid #ff9ec7 !important;
+  border-radius: 12px !important;
+  color: #a41f5c !important;
+  --text-dim: #c2557f;
+  padding-top: 66px;
+  min-width: 88px;
+  box-shadow: 0 2px 16px rgba(255, 110, 165, 0.25) !important;
+}
+/* The cake itself: candle, frosting + drips, pink sponge, gold plate,
+   and a piped "1" on the front. */
+.message-body.chatbox-cake-1::before {
+  content: '1';
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  width: 56px;
+  height: 58px;
+  font-size: 22px;
+  font-weight: 900;
+  font-family: var(--font-code), monospace;
+  color: #ffffff;
+  text-align: center;
+  line-height: 1;
+  padding-top: 32px;
+  text-shadow: 0 0 3px rgba(214, 51, 132, 0.9), 0 1px 0 #d63384;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0) 0 3px, rgba(255, 255, 255, 0.35) 3px 4px) 24px 0 / 8px 18px no-repeat,
+    linear-gradient(#ff4d94, #e63d80) 24px 0 / 8px 18px no-repeat,
+    linear-gradient(#ffffff, #ffeaf3) 4px 18px / 48px 9px no-repeat,
+    radial-gradient(circle at 8px 0, #ffffff 0 4px, rgba(255, 255, 255, 0) 5px) 8px 26px / 16px 7px repeat-x,
+    linear-gradient(#ff8fc0, #ff75ae) 4px 33px / 48px 14px no-repeat,
+    linear-gradient(#f4b93c, #e0a52e) 0 47px / 56px 8px no-repeat;
+  pointer-events: none;
+}
+/* Candle flame. */
+.message-body.chatbox-cake-1::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 33px;
+  width: 10px;
+  height: 10px;
+  background: radial-gradient(circle at 50% 75%, #ffd166 0 45%, #ff7a3d 100%);
+  border-radius: 50% 50% 50% 50% / 65% 65% 35% 35%;
+  box-shadow: 0 0 6px rgba(255, 170, 60, 0.9);
+  pointer-events: none;
 }

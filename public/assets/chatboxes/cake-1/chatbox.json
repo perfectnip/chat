@@ -1,0 +1,12 @@
+{
+  "id": "cake-1",
+  "name": "Anniversary Cake",
+  "author": "jimmyqrg",
+  "description": "A birthday cake with a #1 candle — jchat's first anniversary.",
+  "type": "css",
+  "tail": "false",
+  "files": {
+    "other": "other.svg",
+    "own": "own.svg"
+  }
+}
