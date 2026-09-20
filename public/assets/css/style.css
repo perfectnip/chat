@@ -8181,15 +8181,17 @@ input[type="checkbox"]:checked::after {
   border-radius: 12px !important;
   color: #a41f5c !important;
   --text-dim: #c2557f;
-  padding-top: 30px;
+  padding-top: 16px;
   box-shadow: 0 2px 16px rgba(255, 110, 165, 0.25) !important;
 }
-/* Mini cake: candle, frosting + drips, sponge, plate, piped "1". */
+/* Mini cake: candle, frosting + drips, sponge, plate, piped "1".
+   Sticker badge — half-extended above the bubble's top edge so it
+   reads as a decoration, not part of the text. */
 .message-body.chatbox-cake-1::before {
   content: '1';
   position: absolute;
-  top: 4px;
-  left: 8px;
+  top: -12px;
+  left: 5px;
   width: 20px;
   height: 24px;
   font-size: 8px;
@@ -8212,8 +8214,8 @@ input[type="checkbox"]:checked::after {
 .message-body.chatbox-cake-1::after {
   content: '';
   position: absolute;
-  top: 2px;
-  left: 8px;
+  top: -14px;
+  left: 13px;
   width: 4px;
   height: 5px;
   background: radial-gradient(circle at 50% 70%, #ffd166 0 45%, #ff7a3d 100%);
@@ -8224,9 +8226,9 @@ input[type="checkbox"]:checked::after {
 /* Others' messages: icon at top-right instead. */
 .message:not(.own) .message-body.chatbox-cake-1::before {
   left: auto;
-  right: 8px;
+  right: 5px;
 }
 .message:not(.own) .message-body.chatbox-cake-1::after {
   left: auto;
-  right: 8px;
+  right: 13px;
 }
