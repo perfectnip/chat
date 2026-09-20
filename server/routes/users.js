@@ -2,7 +2,6 @@ import { Router } from 'express';
 import { requireAuth, getCurrentUser, changePassword, canManageUsers } from '../auth.js';
 import { db, GROUP_ID, isEmailBanned, isPrivateUser, canSeePrivateUser, PRIVATE_USER_BLOCKED } from '../db.js';
 import { selectableChatboxStyles } from '../chatbox-styles.js';
-import { isPremiumPlus } from '../premium.js';
 import { upload } from '../upload.js';
 
 const router = Router();
@@ -111,7 +110,7 @@ router.get('/:id/profile', requireAuth, (req, res) => {
 router.patch('/profile', requireAuth, upload.single('avatar'), (req, res) => {
   const user = getCurrentUser(req);
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
-  const { display_name, website, profile_links, description, chatbox_style, chatbox_color, email } = req.body || {};
+  const { display_name, website, profile_links, description, chatbox_style, email } = req.body || {};
   let avatar_url = user.avatar_url;
   if (req.file) avatar_url = `/uploads/${req.file.filename}`;
   const RESERVED_NAMES = ['helper', 'venory'];
@@ -122,25 +121,9 @@ router.patch('/profile', requireAuth, upload.single('avatar'), (req, res) => {
   const desc = description !== undefined ? (typeof description === 'string' ? description.trim().slice(0, 1024) : null) : undefined;
   const cbStyle = typeof chatbox_style === 'string' ? chatbox_style.trim().slice(0, 64) : null;
   // Chatbox style gate: only styles the requesting user may select are
-  // accepted (experimental styles are jimmyqrg-only while in testing;
-  // the custom-color style is Premium Plus only).
+  // accepted (experimental styles are jimmyqrg-only while in testing).
   if (cbStyle !== null && !selectableChatboxStyles(user).includes(cbStyle)) {
     return res.status(400).json({ error: 'That chatbox style is not available' });
-  }
-  // Bubble color: Premium Plus users may set a hex color for the custom
-  // style. Empty string clears it; missing leaves it unchanged.
-  let cbColor = undefined;
-  if (typeof chatbox_color === 'string') {
-    const trimmed = chatbox_color.trim();
-    if (trimmed === '') {
-      cbColor = null;
-    } else if (!/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
-      return res.status(400).json({ error: 'Bubble color must be a #rrggbb hex color' });
-    } else if (!isPremiumPlus(user.id, user.username)) {
-      return res.status(400).json({ error: 'Bubble color requires Premium Plus' });
-    } else {
-      cbColor = trimmed;
-    }
   }
   // Email is opt-in: only treated as an update when the client explicitly sends
   // the field. An empty string clears it; anything else has to look like an
@@ -163,7 +146,7 @@ router.patch('/profile', requireAuth, upload.single('avatar'), (req, res) => {
       mail = lower;
     }
   }
-  if (name !== null || req.file || web !== null || links !== null || desc !== undefined || cbStyle !== null || cbColor !== undefined || mail !== undefined) {
+  if (name !== null || req.file || web !== null || links !== null || desc !== undefined || cbStyle !== null || mail !== undefined) {
     const updates = [];
     const values = [];
     if (name !== null) { updates.push('display_name = ?'); values.push(name); }
@@ -172,14 +155,13 @@ router.patch('/profile', requireAuth, upload.single('avatar'), (req, res) => {
     if (links !== null) { updates.push('profile_links = ?'); values.push(links); }
     if (desc !== undefined) { updates.push('description = ?'); values.push(desc); }
     if (cbStyle !== null) { updates.push('chatbox_style = ?'); values.push(cbStyle); }
-    if (cbColor !== undefined) { updates.push('chatbox_color = ?'); values.push(cbColor); }
     if (mail !== undefined) { updates.push('email = ?'); values.push(mail); }
     if (updates.length) {
       values.push(user.id);
       db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
     }
   }
-  const updated = db.prepare('SELECT id, username, display_name, avatar_url, chatbox_style, chatbox_color, website, profile_links, description, email, is_allowed FROM users WHERE id = ?').get(user.id);
+  const updated = db.prepare('SELECT id, username, display_name, avatar_url, chatbox_style, website, profile_links, description, email, is_allowed FROM users WHERE id = ?').get(user.id);
   const out = { ...updated, is_allowed: !!updated.is_allowed };
   if (out.profile_links && typeof out.profile_links === 'string') out.profile_links = JSON.parse(out.profile_links);
   res.json({ user: out });

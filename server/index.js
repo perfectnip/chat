@@ -1576,7 +1576,7 @@ async function handleWhisperSend(io, caller, payload, ack, httpRes) {
     const audienceIds = persistWhisperAudience(id, recipientId);
     const row = db.prepare(`
       SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.recipient_user_id, m.reply_to_id, m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at,
-             u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
+             u.username, u.display_name, u.avatar_url, u.chatbox_style
       FROM messages m
       LEFT JOIN users u ON u.id = m.sender_id
       WHERE m.id = ?
@@ -1729,7 +1729,7 @@ function insertHelperReply(triggerMsgId, text, roomType, roomId) {
   `).run(id, roomType, roomId, HELPER_USER_ID, text, replyToId, now, now);
 
   const row = db.prepare(`
-    SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
+    SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style
     FROM messages m LEFT JOIN users u ON u.id = m.sender_id WHERE m.id = ?
   `).get(id);
   const msg = { ...row, likes: 0, edit_history: null };
@@ -1940,7 +1940,7 @@ function registerBridgeSocket(socket) {
     // (skip); the same text sent at a clearly different time is a new message.
     const sel = db.prepare(`SELECT 1 FROM messages WHERE room_type='dm' AND room_id=? AND sender_id=? AND content=? AND ABS(created_at - ?) < 300000 LIMIT 1`);
     const fetchRow = db.prepare(`
-      SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
+      SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style
       FROM messages m LEFT JOIN users u ON u.id = m.sender_id WHERE m.id = ?
     `);
     const tx = db.transaction((items) => {
@@ -2358,9 +2358,11 @@ app.get('/api/config', (req, res) => {
 
 /** List available chatbox styles by scanning the chatboxes directory.
  *  Experimental styles carry `experimental: true`; the client hides them
- *  from the picker for everyone except jimmyqrg (temporary testing). */
+ *  from the picker for everyone except jimmyqrg (temporary testing).
+ *  Gated styles carry `locked: true` for users who have not earned them —
+ *  the client keeps those visible with a lock badge. */
 app.get('/api/chatbox-styles', (req, res) => {
-  res.json({ styles: listChatboxStyles() });
+  res.json({ styles: listChatboxStyles(getCurrentUser(req)) });
 });
 
 /* ── /joke: random line from server/jokes.txt ─────────────────────────
@@ -2785,7 +2787,7 @@ app.get('/api/rooms/:roomType/:roomId/pinned', requireAuth, (req, res) => {
   const { roomType, roomId } = req.params;
   const row = db.prepare(`
     SELECT p.message_id, p.pinned_by, p.pinned_at, m.sender_id, m.content, m.msg_type, m.created_at,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
+           u.username, u.display_name, u.avatar_url, u.chatbox_style
     FROM pinned_messages p
     JOIN messages m ON m.id = p.message_id
     LEFT JOIN users u ON u.id = m.sender_id
@@ -2806,7 +2808,7 @@ app.get('/api/rooms/:roomType/:roomId/messages', requireAuth, (req, res) => {
   const wc = whisperVisibleClause(user);
   const rows = db.prepare(`
     SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.reply_to_id, m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at, m.recipient_user_id,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color, u.is_private
+           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.is_private
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.room_type = ? AND m.room_id = ? AND m.created_at < ? AND m.deleted_by_admin = 0 AND ${wc.sql}
@@ -2921,7 +2923,7 @@ app.post('/api/rooms/:roomType/:roomId/messages', requireAuth, upload.single('fi
   createInboxForNewMessage(id, finalContent, reply_to_id || null, user.id, roomType, roomId);
   const row = db.prepare(`
     SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.reply_to_id, m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
+           u.username, u.display_name, u.avatar_url, u.chatbox_style
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.id = ?
@@ -3016,7 +3018,7 @@ app.get('/api/search/messages', requireAuth, (req, res) => {
   const wc = whisperVisibleClause(user);
   const rows = db.prepare(`
     SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.reply_to_id, m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at, m.recipient_user_id,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color, u.is_private
+           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.is_private
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.room_type = ? AND m.room_id = ? AND m.deleted_by_admin = 0 AND ${wc.sql}
@@ -3104,7 +3106,7 @@ app.get('/api/conversations/:convId/messages', requireAuth, (req, res) => {
   const wc = whisperVisibleClause(me);
   let rows = db.prepare(`
     SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.reply_to_id, m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at, m.recipient_user_id,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color, u.is_private
+           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.is_private
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.room_type = 'dm' AND m.room_id = ? AND m.created_at < ? AND m.deleted_by_admin = 0 AND ${wc.sql}
@@ -3246,7 +3248,7 @@ app.post('/api/conversations/:convId/messages', requireAuth, upload.single('file
   createInboxForNewMessage(id, finalContent, reply_to_id || null, user.id, 'dm', req.params.convId);
   const row = db.prepare(`
     SELECT m.id, m.room_type, m.room_id, m.sender_id, m.content, m.msg_type, m.reply_to_id, m.edit_history, m.recalled_at, m.deleted_by_admin, m.created_at, m.updated_at,
-           u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color
+           u.username, u.display_name, u.avatar_url, u.chatbox_style
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.id = ?
@@ -4495,7 +4497,7 @@ io.on('connection', (socket) => {
       `).run(id, roomId, socket.userId, content || '', msg_type || 'text', reply_to_id || null, now, now);
       createInboxForNewMessage(id, content || '', reply_to_id || null, socket.userId, 'dm', roomId);
       const row = db.prepare(`
-        SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color FROM messages m LEFT JOIN users u ON u.id = m.sender_id WHERE m.id = ?
+        SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style FROM messages m LEFT JOIN users u ON u.id = m.sender_id WHERE m.id = ?
       `).get(id);
       const msg = { ...row, likes: 0, edit_history: null };
       io.to(`dm:${roomId}`).emit('message', msg);
@@ -4544,7 +4546,7 @@ io.on('connection', (socket) => {
     `).run(id, roomType, roomId, socket.userId, content || '', msg_type || 'text', reply_to_id || null, now, now);
     createInboxForNewMessage(id, content || '', reply_to_id || null, socket.userId, roomType, roomId);
     const row = db.prepare(`
-      SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style, u.chatbox_color FROM messages m LEFT JOIN users u ON u.id = m.sender_id WHERE m.id = ?
+      SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style FROM messages m LEFT JOIN users u ON u.id = m.sender_id WHERE m.id = ?
     `).get(id);
     const msg = { ...row, likes: 0, edit_history: null };
     io.to(`group:${GROUP_ID}`).emit('message', msg);

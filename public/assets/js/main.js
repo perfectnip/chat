@@ -5681,6 +5681,7 @@ const ICON_BUILDING_SM = '<svg xmlns="http://www.w3.org/2000/svg" width="16" hei
 const ICON_CLOCK_SM = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
 const ICON_MEGAPHONE_SM = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-5v12L3 13v-2z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>';
 const ICON_UNLOCK_SM = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>';
+const ICON_LOCK_SM = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 const ICON_USER_MINUS_SM = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="22" x2="16" y1="11" y2="11"/></svg>';
 const ICON_USER_CHECK_SM = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>';
 const ICON_USER_X_SM = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" x2="22" y1="8" y2="13"/><line x1="22" x2="17" y1="8" y2="13"/></svg>';
@@ -7199,16 +7200,6 @@ function parseFileRef(content, msgType) {
   return null;
 }
 
-/** Pick a readable text color (dark or light) for a #rrggbb background. */
-function textColorForBg(hex) {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
-  if (!m) return '#ffffff';
-  const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return lum > 0.62 ? '#241c3d' : '#ffffff';
-}
-
 function isFileMessage(m) {
   return !!parseFileRef(m.content, m.msg_type);
 }
@@ -7403,11 +7394,7 @@ function renderMessage(m, roomType, roomId, context = {}) {
   if (useSvgBubble && hasTail) bodyClasses.push('message-body-tail');
   if (cbStyle !== 'default') bodyClasses.push(`chatbox-${cbStyle}`);
   if (isWhisper) bodyClasses.push('message-body-whisper');
-  const isCustomColor = cbStyle === 'custom' && /^#[0-9a-fA-F]{6}$/.test(m.chatbox_color || '');
-  const bubbleVars = isCustomColor
-    ? `--bubble-color:${m.chatbox_color};--bubble-text:${textColorForBg(m.chatbox_color)};`
-    : '';
-  const bodyStyle = [useSvgBubble ? `--bubble-svg:url('${cbSvg}')` : '', bubbleVars].filter(Boolean).join(';');
+  const bodyStyle = useSvgBubble ? `--bubble-svg:url('${cbSvg}')` : '';
   const whisperBadge = isWhisper ? `<span class="message-whisper-badge" title="Private message: only you, the recipient, jimmyqrg, and admins with the See whispers permission can see this.">Whisper to @${escapeHtml(recipientUser ? recipientUser.username : (m.recipient_user_id || ''))}</span>` : '';
   return `
     <div class="message-row ${isWhisper ? 'message-row-whisper' : ''}" data-msg-id="${m.id}">
@@ -11799,25 +11786,22 @@ function renderSettingsContent() {
         <p class="settings-account-desc">${tx('chatboxStyleDesc', 'Choose a message bubble style visible to everyone.')}</p>
         <div class="chatbox-picker" id="chatbox-picker">
           ${(state._chatboxStyles.length ? state._chatboxStyles : [{ id: 'default', name: 'Default' }])
-            .filter(s => (!s.experimental || (state.user && state.user.username === 'jimmyqrg')) && (s.id !== 'custom' || !!(state.user && state.user.premium_plus)))
+            .filter(s => !s.experimental || (state.user && state.user.username === 'jimmyqrg'))
             .map(s => {
             const active = (state.user?.chatbox_style || 'default') === s.id;
-            const preview = s.id === 'custom'
-              ? `<div class="chatbox-preview-bubble chatbox-preview-own" style="background-color:${escapeHtml(state.user?.chatbox_color || '#8b5cf6')}; border-radius: 10px;"></div>`
-              : `<div class="chatbox-preview-bubble chatbox-preview-other" style="background-image: url('/assets/chatboxes/${s.id}/other.svg')"></div>
+            const locked = !!s.locked;
+            const lockHint = locked
+              ? (s.unlockLabel ? `${s.unlockLabel} — locked` : tx('chatboxLocked', 'Locked'))
+              : '';
+            const preview = `<div class="chatbox-preview-bubble chatbox-preview-other" style="background-image: url('/assets/chatboxes/${s.id}/other.svg')"></div>
                 <div class="chatbox-preview-bubble chatbox-preview-own" style="background-image: url('/assets/chatboxes/${s.id}/own.svg')"></div>`;
-            return `<button type="button" class="chatbox-picker-item ${active ? 'active' : ''}" data-style="${s.id}" title="${escapeHtml(s.description || '')}">
-              <div class="chatbox-picker-preview">${preview}</div>
+            return `<button type="button" class="chatbox-picker-item ${active ? 'active' : ''}${locked ? ' locked' : ''}" data-style="${s.id}" data-locked="${locked ? '1' : '0'}" data-unlock="${escapeHtml(s.unlockLabel || '')}" title="${escapeHtml(locked ? lockHint : (s.description || ''))}">
+              <div class="chatbox-picker-preview">${preview}${locked ? `<span class="chatbox-picker-lock" aria-hidden="true">${ICON_LOCK_SM}</span>` : ''}</div>
               <span class="chatbox-picker-label">${escapeHtml(s.name)}</span>
+              ${locked ? `<span class="chatbox-picker-locked-label">${escapeHtml(tx('locked', 'Locked'))}</span>` : ''}
             </button>`;
           }).join('')}
         </div>
-        ${(state.user?.chatbox_style === 'custom' && state.user?.premium_plus) ? `
-        <label class="settings-form-label">${tx('bubbleColorLabel', 'Bubble color')}</label>
-        <div class="bubble-color-row">
-          <input type="color" id="settings-bubble-color" value="${escapeHtml(state.user?.chatbox_color || '#8b5cf6')}" title="${tx('bubbleColorTitle', 'Pick your bubble color')}" />
-          <input type="text" id="settings-bubble-color-hex" class="settings-text-input" value="${escapeHtml(state.user?.chatbox_color || '#8b5cf6')}" maxlength="7" spellcheck="false" placeholder="#8b5cf6" />
-        </div>` : ''}
         <h3 class="settings-section-title">${tx('uiAnimation', 'UI Animation')}</h3>
         <p class="settings-account-desc">${tx('uiAnimationDesc', 'Enable or disable transitions and animations throughout the interface.')}</p>
         <label class="settings-checkbox-label">
@@ -12948,6 +12932,13 @@ function bindSettings() {
   document.getElementById('chatbox-picker')?.addEventListener('click', async (e) => {
     const item = e.target.closest('.chatbox-picker-item');
     if (!item) return;
+    if (item.dataset.locked === '1') {
+      const label = item.dataset.unlock || '';
+      showToast(label
+        ? `${label} — ${tx('chatboxLockedHint', 'you have not unlocked this bubble style yet.')}`
+        : tx('chatboxLocked', 'This bubble style is locked.'), 'error');
+      return;
+    }
     const style = item.dataset.style;
     try {
       const { user } = await apiPatch('/api/users/profile', { chatbox_style: style });
@@ -12955,29 +12946,6 @@ function bindSettings() {
       render();
       bindSettings();
     } catch (_) {}
-  });
-  const bubbleColorInput = document.getElementById('settings-bubble-color');
-  const bubbleHexInput = document.getElementById('settings-bubble-color-hex');
-  const applyBubbleColor = async (hex) => {
-    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return;
-    if (bubbleColorInput) bubbleColorInput.value = hex;
-    if (bubbleHexInput) bubbleHexInput.value = hex;
-    try {
-      const { user } = await apiPatch('/api/users/profile', { chatbox_color: hex });
-      if (state.user) state.user.chatbox_color = user.chatbox_color || null;
-      const prev = document.querySelector('.chatbox-picker-item[data-style="custom"] .chatbox-preview-own');
-      if (prev) prev.style.backgroundColor = hex;
-    } catch (_) {}
-  };
-  bubbleColorInput?.addEventListener('change', (e) => applyBubbleColor(e.target.value));
-  bubbleHexInput?.addEventListener('change', (e) => {
-    let hex = (e.target.value || '').trim();
-    if (hex && !hex.startsWith('#')) hex = '#' + hex;
-    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
-      applyBubbleColor(hex);
-    } else if (bubbleColorInput && state.user?.chatbox_color) {
-      bubbleHexInput.value = state.user.chatbox_color;
-    }
   });
   document.getElementById('settings-language')?.addEventListener('change', (e) => {
     const lang = e.target.value;

@@ -45,6 +45,8 @@ try { db.exec('ALTER TABLE users ADD COLUMN profile_links TEXT'); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN description TEXT'); } catch (_) {}
 try { db.exec("ALTER TABLE users ADD COLUMN chatbox_style TEXT DEFAULT 'default'"); } catch (_) {}
 try { db.exec("ALTER TABLE users ADD COLUMN chatbox_color TEXT"); } catch (_) {}
+// Custom-color style was removed (2026-09-20): reset anyone still on it.
+try { db.exec("UPDATE users SET chatbox_style = 'default' WHERE chatbox_style = 'custom'"); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 
 // Whispers: per-row audience for /whisper messages. The sender is implicit

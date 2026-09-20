@@ -2716,12 +2716,12 @@ select:focus {
 /* ── Star Gazer chatbox (CSS-based cosmic bubble) ── */
 .message-body.chatbox-star-gazer {
   background: linear-gradient(135deg, #4C1D95 0%, #331464 100%) !important;
-  border: 1.5px solid #7C3AED !important;
+  border: 1.5px solid #8B5CF6 !important;
   border-radius: 12px !important;
   box-shadow:
-    0 0 0 3px rgba(124, 58, 237, 0.15),
-    0 2px 16px rgba(124, 58, 237, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+    0 0 0 2.5px rgba(139, 92, 246, 0.20),
+    0 2px 14px rgba(51, 20, 100, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
   position: relative;
   overflow: hidden;
 }
@@ -2763,6 +2763,43 @@ select:focus {
 .chatbox-picker-item.active {
   border-color: var(--purple);
   box-shadow: 0 0 0 2px var(--glow);
+}
+
+/* Earned styles: still shown to everyone, but not selectable until unlocked. */
+.chatbox-picker-item.locked {
+  position: relative;
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.chatbox-picker-item.locked:hover {
+  border-color: var(--border);
+}
+
+.chatbox-picker-item.locked .chatbox-preview-bubble {
+  filter: grayscale(1) contrast(0.85);
+}
+
+.chatbox-picker-lock {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.chatbox-picker-locked-label {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
 }
 
 .chatbox-picker-preview {
@@ -8047,8 +8084,6 @@ input[type="checkbox"]:checked::after {
 .message-body.chatbox-sticky-note .message-reply-preview,
 .message-body.chatbox-bubble-gum .message-content,
 .message-body.chatbox-bubble-gum .message-reply-preview,
-.message-body.chatbox-custom .message-content,
-.message-body.chatbox-custom .message-reply-preview,
 .message-body.chatbox-cake-1 .message-content,
 .message-body.chatbox-cake-1 .message-reply-preview,
 .message-body.chatbox-star-gazer .message-content,
@@ -8056,41 +8091,56 @@ input[type="checkbox"]:checked::after {
   color: inherit !important;
 }
 
-/* Neon Blaze */
+/* Neon Blaze — cover art: own = pink→orange neon stroke, other =
+   cyan→violet neon stroke, dark gradient fill. */
 .message-body.chatbox-neon-blaze {
   background: linear-gradient(180deg, #241040 0%, #12061f 100%) !important;
   border: 1.5px solid #ff2d95 !important;
   border-radius: 10px !important;
-  box-shadow: 0 0 0 3px rgba(255, 45, 149, 0.15), 0 2px 16px rgba(255, 138, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+  box-shadow: 0 0 0 3px rgba(255, 45, 149, 0.16), 0 0 16px rgba(255, 138, 0, 0.4), 0 2px 14px rgba(255, 45, 149, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
   color: #ffe4f2 !important;
 }
+.message:not(.own) .message-body.chatbox-neon-blaze {
+  background: linear-gradient(180deg, #0b1220 0%, #060a14 100%) !important;
+  border-color: #00e5ff !important;
+  box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.14), 0 0 16px rgba(124, 58, 237, 0.45), 0 2px 14px rgba(0, 229, 255, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
 
-/* Aqua Glass */
+/* Aqua Glass — cover art: frosted translucent fill, light rim
+   stroke with a wider cyan glow stroke beneath it. */
 .message-body.chatbox-aqua-glass {
   background: linear-gradient(180deg, rgba(224, 242, 254, 0.28) 0%, rgba(224, 242, 254, 0.05) 38%, rgba(125, 211, 252, 0.14) 100%) !important;
-  border: 1.5px solid rgba(125, 211, 252, 0.75) !important;
+  border: 1.5px solid rgba(224, 242, 254, 0.5) !important;
   border-radius: 10px !important;
   color: #e0f2fe !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25) !important;
+  box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.18), 0 0 14px rgba(125, 211, 252, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+}
+.message:not(.own) .message-body.chatbox-aqua-glass {
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16), 0 0 14px rgba(56, 189, 248, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
 }
 
-/* Pixel Pop */
+/* Pixel Pop — cover art: flat dark fill, chunky hard corners,
+   no glow, no offset shadow. Own = cyan stroke, other = violet. */
 .message-body.chatbox-pixel-pop {
   background: #0f172a !important;
-  border: 3px solid #22d3ee !important;
+  border: 2px solid #22d3ee !important;
   border-radius: 0 !important;
   color: #cffafe !important;
-  box-shadow: 4px 4px 0 rgba(34, 211, 238, 0.25) !important;
+  box-shadow: none !important;
+}
+.message:not(.own) .message-body.chatbox-pixel-pop {
+  border-color: #a78bfa !important;
 }
 
-/* Sticky Note */
+/* Sticky Note — cover art: flat yellow paper, amber folded corner,
+   thin amber outline, radius 10, no outer shadow. */
 .message-body.chatbox-sticky-note {
   background: #fef08a !important;
   border: 1.5px solid #d97706 !important;
-  border-radius: 6px !important;
+  border-radius: 10px !important;
   color: #3f2a06 !important;
   --text-dim: #8a6a1f;
-  box-shadow: 0 2px 10px rgba(217, 119, 6, 0.25) !important;
+  box-shadow: none !important;
 }
 .message-body.chatbox-sticky-note::before {
   content: '';
@@ -8110,20 +8160,37 @@ input[type="checkbox"]:checked::after {
   right: -1.5px;
   width: 0;
   height: 0;
-  border-top: 15px solid #fcd34d;
+  border-top: 15px solid #fbbf24;
   border-left: 15px solid transparent;
   pointer-events: none;
 }
 .message-body.chatbox-sticky-note .message-content a {
   color: #92400e !important;
 }
+/* Cover art mirrors the fold: other messages fold the top-LEFT corner. */
+.message:not(.own) .message-body.chatbox-sticky-note::before {
+  left: -1.5px;
+  right: auto;
+  border-top: 20px solid #f59e0b;
+  border-left: none;
+  border-right: 20px solid transparent;
+}
+.message:not(.own) .message-body.chatbox-sticky-note::after {
+  left: -1.5px;
+  right: auto;
+  border-top: 15px solid #fbbf24;
+  border-left: none;
+  border-right: 15px solid transparent;
+}
 
-/* Bubble Gum */
+/* Bubble Gum — cover art: pink→berry gradient blob, light rim,
+   radius 10, two glossy highlights, no glow. */
 .message-body.chatbox-bubble-gum {
   background: linear-gradient(180deg, #f472b6 0%, #be185d 100%) !important;
   border: 1.5px solid #f9a8d4 !important;
-  border-radius: 14px !important;
+  border-radius: 10px !important;
   color: #fce7f3 !important;
+  box-shadow: none !important;
 }
 .message-body.chatbox-bubble-gum::before {
   content: '';
@@ -8136,37 +8203,22 @@ input[type="checkbox"]:checked::after {
   border-radius: 50%;
   pointer-events: none;
 }
-
-/* Custom Color (Premium Plus) — the color comes from the --bubble-color
-   and --bubble-text custom properties set inline on the message body. */
-.message-body.chatbox-custom {
-  background: var(--bubble-color, #8b5cf6) !important;
-  border: 1.5px solid color-mix(in srgb, var(--bubble-color, #8b5cf6) 60%, white) !important;
-  border-radius: 12px !important;
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--bubble-color, #8b5cf6) 25%, transparent),
-    0 2px 16px color-mix(in srgb, var(--bubble-color, #8b5cf6) 45%, transparent) !important;
-  color: var(--bubble-text, #ffffff) !important;
+.message-body.chatbox-bubble-gum::after {
+  content: '';
+  position: absolute;
+  top: 40%;
+  right: 12px;
+  width: 12%;
+  height: 20%;
+  background: radial-gradient(ellipse at 50% 40%, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 70%);
+  border-radius: 50%;
+  pointer-events: none;
 }
-
-/* Bubble color picker row (Premium Plus, custom style selected) */
-.bubble-color-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-top: 0.25rem;
-}
-.bubble-color-row input[type="color"] {
-  width: 44px;
-  height: 34px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  cursor: pointer;
-}
-.bubble-color-row .settings-text-input {
-  width: 110px;
+/* Cover art: other messages get the indigo gum, own get the pink gum. */
+.message:not(.own) .message-body.chatbox-bubble-gum {
+  background: linear-gradient(180deg, #4f46e5 0%, #312e81 100%) !important;
+  border-color: #818cf8 !important;
+  color: #e0e7ff !important;
 }
 
 /* Anniversary Cake — first-anniversary birthday cake as a small corner
@@ -8178,20 +8230,20 @@ input[type="checkbox"]:checked::after {
     radial-gradient(circle at 5px 5px, #7aa8ff 0 2px, rgba(255, 255, 255, 0) 2.6px) 18px 8px / 34px 20px repeat,
     linear-gradient(180deg, #fff9fc 0%, #ffe6f0 100%) !important;
   border: 1.5px solid #ff9ec7 !important;
-  border-radius: 12px !important;
+  border-radius: 10px !important;
   color: #a41f5c !important;
   --text-dim: #c2557f;
   padding-top: 16px;
-  box-shadow: 0 2px 16px rgba(255, 110, 165, 0.25) !important;
+  box-shadow: none !important;
 }
 /* Mini cake: candle, frosting + drips, sponge, plate, piped "1".
-   Sticker badge — half-extended above the bubble's top edge so it
-   reads as a decoration, not part of the text. */
+   Sticker badge — half-extended above the bubble's top edge AND
+   half past the side edge, so it reads as a decoration, not text. */
 .message-body.chatbox-cake-1::before {
   content: '1';
   position: absolute;
   top: -12px;
-  left: 5px;
+  left: -10px;
   width: 20px;
   height: 24px;
   font-size: 8px;
@@ -8215,7 +8267,7 @@ input[type="checkbox"]:checked::after {
   content: '';
   position: absolute;
   top: -14px;
-  left: 13px;
+  left: -2px;
   width: 4px;
   height: 5px;
   background: radial-gradient(circle at 50% 70%, #ffd166 0 45%, #ff7a3d 100%);
@@ -8226,9 +8278,9 @@ input[type="checkbox"]:checked::after {
 /* Others' messages: icon at top-right instead. */
 .message:not(.own) .message-body.chatbox-cake-1::before {
   left: auto;
-  right: 5px;
+  right: -10px;
 }
 .message:not(.own) .message-body.chatbox-cake-1::after {
   left: auto;
-  right: 13px;
+  right: -2px;
 }
