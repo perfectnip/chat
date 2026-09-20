@@ -1,8 +1,9 @@
 // Shared chatbox-style listing/validation for the chat app.
-// Public styles = the folders in public/assets/chatboxes; experimental
-// styles are hidden from the picker for everyone except jimmyqrg
-// (temporary testing gate — remove ids from EXPERIMENTAL_CHATBOX_STYLES
-// to make them public).
+// Public styles = the folders in public/assets/chatboxes. Styles in
+// EXPERIMENTAL_CHATBOX_STYLES are hidden from the picker for everyone
+// except jimmyqrg (temporary testing gate). Released styles are removed
+// from that set — it is currently empty, so every style is public
+// (custom stays gated separately: Premium Plus only).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,13 +11,7 @@ import { isPremiumPlus } from './premium.js';
 
 const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
-export const EXPERIMENTAL_CHATBOX_STYLES = new Set([
-  'neon-blaze',
-  'aqua-glass',
-  'pixel-pop',
-  'sticky-note',
-  'bubble-gum',
-]);
+export const EXPERIMENTAL_CHATBOX_STYLES = new Set([]);
 
 /** List chatbox styles by scanning the chatboxes directory. */
 export function listChatboxStyles() {
