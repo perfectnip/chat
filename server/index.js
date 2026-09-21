@@ -11,6 +11,8 @@ import bcrypt from 'bcryptjs';
 import { sessionMiddleware, touchSession, getCurrentUser, requireAuth, canRecallOrEdit, canSendInbox, canBroadcast, canEditDocs, canKick, canDeleteMessages, canTimeout, canUnlimitedEditRecall, canSeeWhispers, tokenAuthMiddleware } from './auth.js';
 import { db, GROUP_ID, PANELS, HELPER_USER_ID, isBlacklisted, isUserDeleted, canSeePrivateUser, PRIVATE_USER_BLOCKED, whisperVisibleClause } from './db.js';
 import { listChatboxStyles } from './chatbox-styles.js';
+import { tierLimits, getUserTier, tierAllowsUploads, HELPER_MODEL_INPUT_TOKENS } from './premium.js';
+import { consumeHelperMessage, quotaMessage, quotaResetAt } from './quotas.js';
 import { moderateMessage } from './ai-moderation.js';
 import { deepseekFetch } from './deepseek-client.js';
 import { upload } from './upload.js';
@@ -27,6 +29,7 @@ import { maybePushForMessage, maybePushForMention, sendRawPush } from './webpush
 import savesRoutes from './routes/saves.js';
 import reportsRoutes from './routes/reports.js';
 import anniversaryRoutes from './routes/anniversary.js';
+import billingRoutes from './routes/billing.js';
 import { recordAuditLog } from './audit.js';
 import { recordUploadRef, markUploadOrphan } from './uploads-tracker.js';
 import { findMentionUserIds, MENTION_INCLUDES_ALL_RE, MENTION_INCLUDES_ADMINS_RE } from './mentions.js';
@@ -517,8 +520,9 @@ const DEEPSEEK_API = process.env.DEEPSEEK_KEY
 // whole room history is fair game (including group messages that never
 // @mentioned the helper). When history exceeds the token budget, older
 // messages are compacted into a running summary instead of being cleared.
-const HELPER_CONTEXT_TOKEN_BUDGET = 10000;
-const HELPER_CONTEXT_KEEP_TOKENS = 6000;   // newest messages kept verbatim
+// Context budgets are per tier now (free 10k / premium 100k / plus 1M) and
+// live in server/premium.js — see buildHelperContext, which derives its
+// keep-recent window from the tier budget.
 const HELPER_CONTEXT_MAX_ROWS = 1000;      // hard fetch cap to bound worst case
 
 function helperSystemPrompt(roomType) {
@@ -1118,11 +1122,19 @@ async function compactConversation(prevSummary, newerText) {
   return prevSummary || '';
 }
 
-async function buildHelperContext(triggerMsg, roomType, roomId) {
+async function buildHelperContext(triggerMsg, roomType, roomId, tier = 'free') {
   // Unlimited message access: everything in the room is fair game for
   // context (including group-chat messages that never mentioned @helper),
   // bounded only by a token budget. Over budget, older messages are
   // COMPACTED into a persisted running summary instead of being cleared.
+  //
+  // The budget is per tier (free 10k / premium 100k / plus 1M tokens of
+  // retained history). The assembled prompt is additionally clamped to the
+  // model's own window, so a large budget means "keep more history before
+  // summarising", never "send more than DeepSeek accepts".
+  const tierBudget = tierLimits(tier).contextTokens;
+  const budget = Math.min(tierBudget, HELPER_MODEL_INPUT_TOKENS);
+  const keepTarget = Math.max(1500, Math.round(budget * 0.6));
   const roomKey = `${roomType}:${roomId}`;
   const sumRow = db.prepare('SELECT summary, through_created_at FROM helper_context_summaries WHERE room_key = ?').get(roomKey);
   const through = sumRow?.through_created_at ?? 0;
@@ -1155,13 +1167,13 @@ async function buildHelperContext(triggerMsg, roomType, roomId) {
 
   let summaryText = summaryText0;
   let keep = formatted;
-  if (totalTokens > HELPER_CONTEXT_TOKEN_BUDGET) {
+  if (totalTokens > budget) {
     // Keep the newest messages verbatim; compact everything older.
     let keepTokens = 0;
     let keepStart = formatted.length;
     for (let i = formatted.length - 1; i >= 0; i--) {
       const t = estimateTokens(formatted[i].content);
-      if (keepTokens + t > HELPER_CONTEXT_KEEP_TOKENS) break;
+      if (keepTokens + t > keepTarget) break;
       keepTokens += t;
       keepStart = i;
     }
@@ -1602,6 +1614,37 @@ function ackOrHttp(res, ack, status, body) {
   return ack?.({ status, ...body });
 }
 
+/** Files sent TO VENORY are a Premium feature (free tier has no uploads).
+ *  Enforced server-side for every path a file could reach the helper through;
+ *  the client pre-checks too, but that is only UX.
+ *  `scope` is 'dm' when the conversation is with the helper, 'mention' when a
+ *  group message @-mentions the helper (the file lands in the helper's
+ *  context either way). */
+function venoryUploadGate(user, { hasFile, scope }) {
+  if (!hasFile) return { allowed: true, tier: getUserTier(user) };
+  if (scope !== 'dm' && scope !== 'mention') return { allowed: true, tier: getUserTier(user) };
+  const tier = getUserTier(user);
+  if (tierAllowsUploads(tier)) return { allowed: true, tier };
+  return {
+    allowed: false,
+    tier,
+    error: 'UPGRADE_REQUIRED',
+    message: 'File uploads to Venory are a Premium feature. Upgrade to send files.',
+  };
+}
+
+/** Username for the user sending a Venory trigger (tier resolution needs it
+ *  only for the owner override, but the quota row is keyed on the id). */
+function helperQuotaUsername(userId) {
+  if (!userId) return '';
+  try {
+    const u = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+    return u?.username || '';
+  } catch (_) {
+    return '';
+  }
+}
+
 async function helperReply(triggerMsgId, content, roomType, roomId, userId, agentOpts) {
   const io = app.get('io');
   const roomKey = presenceRoomKeyForRoom(roomType, roomId);
@@ -1618,6 +1661,30 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
       console.error('[helper-bot] busy-note insert failed:', err);
     }
     return;
+  }
+  // ── Daily message quota ────────────────────────────────────────────────
+  // Free 30/day, Premium 100/day, Premium Plus unlimited. Checked and spent
+  // here so EVERY trigger path (DM, group @helper, session-routed sends) is
+  // covered by one gate. The owner is on an unlimited tier, so his DM lane is
+  // unaffected.
+  const quota = consumeHelperMessage({ id: userId, username: helperQuotaUsername(userId) });
+  if (!quota.allowed) {
+    try {
+      insertHelperReply(triggerMsgId, quotaMessage(quota, 'message'), roomType, roomId);
+    } catch (err) {
+      console.error('[helper-bot] quota-note insert failed:', err);
+    }
+    io?.to(roomKey).emit('helper:quota', {
+      roomType, roomId, tier: quota.tier, limit: quota.limit,
+      used: quota.used, remaining: quota.remaining, resetAt: quotaResetAt(), exceeded: true,
+    });
+    return;
+  }
+  if (!quota.unlimited && quota.limit) {
+    io?.to(roomKey).emit('helper:quota', {
+      roomType, roomId, tier: quota.tier, limit: quota.limit,
+      used: quota.used, remaining: quota.remaining, resetAt: quotaResetAt(), exceeded: false,
+    });
   }
   const controller = new AbortController();
   const active = { kind: 'deepseek', taskId: triggerMsgId, controller, sessionKey: getAgentSession() || '' };
@@ -1653,7 +1720,7 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
       console.warn('[helper-bot] no DeepSeek endpoint configured; helper AI disabled');
       return;
     }
-    const messages = await buildHelperContext(content, roomType, roomId);
+    const messages = await buildHelperContext(content, roomType, roomId, quota.tier);
     const headers = { 'Content-Type': 'application/json' };
     if (process.env.DEEPSEEK_KEY) {
       headers['Authorization'] = `Bearer ${process.env.DEEPSEEK_KEY}`;
@@ -2577,6 +2644,7 @@ app.post('/internal/send-push', express.json({ limit: '64kb' }), (req, res) => {
 app.use('/api/saves', savesRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/anniversary', anniversaryRoutes);
+app.use('/api/premium', billingRoutes);
 
 // DeepSeek streaming proxy for the games site's Venory AI chat
 // (perfectnip.github.io). The client is a static page and can't hold a
@@ -2858,6 +2926,19 @@ app.post('/api/rooms/:roomType/:roomId/messages', requireAuth, upload.single('fi
     if (req.file) try { fsRm(req.file.path, { force: true }); } catch (_) {}
     return res.status(403).json({ error: 'You are timed out from group chat' });
   }
+  // A file attached to a message that @-mentions Venory is a file sent TO
+  // Venory (it lands in the helper's context) — Premium only.
+  {
+    const gateContent = typeof req.body?.content === 'string' ? req.body.content : '';
+    const gate = venoryUploadGate(user, {
+      hasFile: !!req.file,
+      scope: HELPER_RE.test(gateContent) ? 'mention' : null,
+    });
+    if (!gate.allowed) {
+      if (req.file) try { fsRm(req.file.path, { force: true }); } catch (_) {}
+      return res.status(403).json({ error: gate.error, message: gate.message, tier: gate.tier });
+    }
+  }
   const { content, msg_type, reply_to_id } = req.body || {};
   let finalContent = typeof content === 'string' ? content : '';
   let msgType = (msg_type || 'text').slice(0, 32);
@@ -2932,7 +3013,7 @@ app.post('/api/rooms/:roomType/:roomId/messages', requireAuth, upload.single('fi
   io.to(`group:${GROUP_ID}`).emit('message', msg);
   maybePushForMessage(msg);
   if (user.id !== HELPER_USER_ID && HELPER_RE.test(finalContent || '')) {
-    helperReply(id, finalContent, roomType, roomId);
+    helperReply(id, finalContent, roomType, roomId, user.id);
   }
   res.status(201).json({ message: msg });
 });
@@ -3136,6 +3217,18 @@ app.post('/api/conversations/:convId/messages', requireAuth, upload.single('file
   const otherId = conv.user1_id === user.id ? conv.user2_id : conv.user1_id;
   // Mirror the socket-side checks so HTTP fallback cannot be used to bypass
   // moderation actions (blacklist, dm timeout, friendship limits, blocking).
+  // Files in a DM with Venory are Premium-only (the server is the authority
+  // here; the client-side gate is UX and can be bypassed by hand-made calls).
+  {
+    const gate = venoryUploadGate(user, {
+      hasFile: !!req.file,
+      scope: otherId === HELPER_USER_ID ? 'dm' : null,
+    });
+    if (!gate.allowed) {
+      if (req.file) try { fsRm(req.file.path, { force: true }); } catch (_) {}
+      return res.status(403).json({ error: gate.error, message: gate.message, tier: gate.tier });
+    }
+  }
   if (isBlacklisted(user.id)) {
     const other = db.prepare('SELECT id, is_allowed FROM users WHERE id = ?').get(otherId);
     if (!other || (other.id !== 'jimmyqrg' && !other.is_allowed)) {

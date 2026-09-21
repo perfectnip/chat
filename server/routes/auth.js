@@ -5,6 +5,7 @@ import { issueToken, revokeToken, extractToken, resolveToken } from '../tokens.j
 import { db, isEmailBanned } from '../db.js';
 import { sendEmail, buildResetEmail, buildVerificationCodeEmail, buildAccountKeyViewEmail, buildRecoveryCodeEmail, buildRecoveryAttemptEmail, getPublicBaseUrl } from '../email.js';
 import { recordAuditLog } from '../audit.js';
+import { refreshUserTier } from '../premium.js';
 
 const router = Router();
 
@@ -275,6 +276,10 @@ router.post('/login', async (req, res, next) => {
       return res.status(200).json({ error: 'This account is frozen. Use Recover Account with your payment key to unfreeze it.', frozen: true });
     }
     req.session.userId = result.user.id;
+    // Refresh the premium tier in the background so the first Venory message of
+    // the session already sees the right limits (a stale/missing cache would
+    // otherwise apply the free tier until the next refresh).
+    refreshUserTier(result.user).catch(() => {});
     const extras = wantsToken(req) ? { token: issueToken(result.user.id, 'login') } : {};
     req.session.save(() => res.json({ user: result.user, ...extras }));
   } catch (err) {

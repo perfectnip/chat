@@ -8284,3 +8284,240 @@ input[type="checkbox"]:checked::after {
   left: auto;
   right: -2px;
 }
+
+/* ====================================================================
+ * Premium (Venory subscription) UI
+ * Tiers are enforced server-side; everything here is presentation.
+ * ==================================================================*/
+
+.premium-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.premium-modal[hidden] { display: none; }
+.premium-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 4, 14, 0.72);
+  backdrop-filter: blur(4px);
+}
+.premium-modal-card {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: min(88vh, 900px);
+  overflow-y: auto;
+  background: linear-gradient(180deg, #1d1430 0%, #150f24 100%);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: 18px;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.6);
+  color: #ece9f7;
+}
+.premium-modal-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: transparent;
+  border: 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.premium-modal-close:hover { color: #fff; }
+.premium-modal-body { padding: 26px 24px 22px; }
+.premium-loading { text-align: center; padding: 40px; color: rgba(255, 255, 255, 0.6); }
+
+.premium-head { text-align: center; margin-bottom: 14px; }
+.premium-crown { font-size: 28px; }
+.premium-head h2 {
+  margin: 6px 0 4px;
+  font-size: 21px;
+  font-weight: 700;
+  background: linear-gradient(90deg, #c4b5fd, #f0abfc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.premium-sub { margin: 0; font-size: 13px; color: rgba(255, 255, 255, 0.62); }
+
+.premium-plans-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+  margin: 16px 0 12px;
+}
+.premium-plan-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.75);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.premium-plan-btn.active {
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(167, 139, 250, 0.7);
+  color: #fff;
+}
+.premium-plan-save { font-size: 11px; color: #86efac; margin-left: 4px; }
+
+.premium-tiers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 620px) {
+  .premium-tiers { grid-template-columns: 1fr; }
+}
+.premium-tier {
+  position: relative;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 14px 12px;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+.premium-tier:hover { border-color: rgba(167, 139, 250, 0.55); }
+.premium-tier.selected {
+  border-color: #a78bfa;
+  background: rgba(139, 92, 246, 0.16);
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.35) inset;
+}
+.premium-tier.current { border-color: rgba(134, 239, 172, 0.5); }
+.premium-tier-badge {
+  position: absolute;
+  top: -9px;
+  right: 10px;
+  background: #166534;
+  color: #dcfce7;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.premium-tier-name { display: block; font-weight: 650; font-size: 14.5px; }
+.premium-tier-price { display: block; font-size: 13px; color: #c4b5fd; margin: 3px 0 8px; }
+.premium-tier-features { margin: 0; padding-left: 16px; font-size: 12.5px; color: rgba(255, 255, 255, 0.75); }
+.premium-tier-features li { margin-bottom: 3px; }
+
+.premium-status { text-align: center; font-size: 12px; color: rgba(255, 255, 255, 0.5); margin: 12px 0 4px; }
+.premium-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 12px; }
+.premium-btn {
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 9px 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.premium-btn.primary {
+  background: linear-gradient(135deg, #8b5cf6, #d946ef);
+  color: #fff;
+}
+.premium-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.premium-btn.ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.8);
+}
+.premium-btn.small { padding: 6px 11px; font-size: 12.5px; }
+.premium-checkout-mount { margin-top: 16px; }
+.premium-checkout-mount.active {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 16px;
+}
+
+/* Settings card */
+.premium-settings-card {
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.28);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.premium-settings-top { display: flex; align-items: center; gap: 8px; }
+.premium-plan-chip {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.premium-plan-chip.tier-premium { background: rgba(139, 92, 246, 0.35); }
+.premium-plan-chip.tier-plus { background: linear-gradient(135deg, #8b5cf6, #d946ef); }
+.premium-settings-hint { font-size: 12px; opacity: 0.6; }
+.premium-settings-features { margin: 10px 0; padding-left: 18px; font-size: 13px; }
+.premium-settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Banner (profile page) */
+.premium-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.18), rgba(217, 70, 239, 0.14));
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.premium-banner.compact { padding: 10px 12px; }
+.premium-banner.active { background: rgba(134, 239, 172, 0.1); border-color: rgba(134, 239, 172, 0.35); }
+.premium-banner-icon { font-size: 20px; }
+.premium-banner-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.premium-banner-text strong { font-size: 14px; }
+.premium-banner-text span { font-size: 12px; opacity: 0.7; }
+
+/* Left-bar nav entry */
+.left-bar-item.premium-left-bar { background: transparent; border: 0; cursor: pointer; font-family: inherit; }
+.left-bar-item.premium-left-bar.is-premium .left-bar-icon { filter: drop-shadow(0 0 6px rgba(217, 70, 239, 0.6)); }
+.premium-badge-dot {
+  background: linear-gradient(135deg, #8b5cf6, #d946ef) !important;
+}
+
+/* Inline quota bar above the Venory composer */
+.premium-quota-bar { padding: 0 0 6px; }
+.premium-quota-bar[hidden] { display: none; }
+.premium-quota-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.62);
+}
+.premium-quota-text { white-space: nowrap; }
+.premium-quota-unlimited { color: #86efac; }
+.premium-quota-track {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+  max-width: 160px;
+}
+.premium-quota-fill { display: block; height: 100%; background: #a78bfa; }
+.premium-quota-inner.warn .premium-quota-fill { background: #fbbf24; }
+.premium-quota-inner.exhausted .premium-quota-fill { background: #f87171; }
+.premium-quota-inner.exhausted .premium-quota-text { color: #fca5a5; }
+.premium-quota-cta {
+  border: 0;
+  background: linear-gradient(135deg, #8b5cf6, #d946ef);
+  color: #fff;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}

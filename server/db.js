@@ -47,6 +47,29 @@ try { db.exec("ALTER TABLE users ADD COLUMN chatbox_style TEXT DEFAULT 'default'
 try { db.exec("ALTER TABLE users ADD COLUMN chatbox_color TEXT"); } catch (_) {}
 // Custom-color style was removed (2026-09-20): reset anyone still on it.
 try { db.exec("UPDATE users SET chatbox_style = 'default' WHERE chatbox_style = 'custom'"); } catch (_) {}
+
+// Premium tier cache. The Stripe subscription lives on the Cloudflare Worker
+// (keyed by chat user id); this row is the last tier we resolved for a user so
+// sending a message never has to wait on the network.
+try {
+  db.exec(`CREATE TABLE IF NOT EXISTS user_tiers (
+    user_id    TEXT PRIMARY KEY,
+    tier       TEXT NOT NULL DEFAULT 'free',
+    source     TEXT,
+    checked_at INTEGER NOT NULL DEFAULT 0
+  )`);
+} catch (err) { console.error('[db.boot] user_tiers:', err?.message || err); }
+
+// Daily Venory (helper) message counts, one row per user per day. Free users
+// get 30/day, Premium 100/day, Premium Plus unlimited.
+try {
+  db.exec(`CREATE TABLE IF NOT EXISTS helper_daily_usage (
+    user_id  TEXT NOT NULL,
+    day      TEXT NOT NULL,
+    messages INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
+  )`);
+} catch (err) { console.error('[db.boot] helper_daily_usage:', err?.message || err); }
 try { db.exec('ALTER TABLE users ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 
 // Whispers: per-row audience for /whisper messages. The sender is implicit

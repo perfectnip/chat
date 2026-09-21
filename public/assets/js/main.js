@@ -1,6 +1,10 @@
 // @ts-nocheck
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete, uploadFile, getDefaultAvatarUrl } from './api.js';
 import { compressMedia, isCompressibleMedia, formatBytes } from './mediaCompression.js';
+import {
+  initPremiumClient, quotaBarHtml, maybeBlockVenoryUpload, handleUpgradeRequired,
+  settingsPremiumHtml, premiumBannerHtml,
+} from './premium.js';
 
 if (typeof window !== 'undefined' && window.katex) {
   window.renderKatex = function (latex, displayMode) {
@@ -2909,6 +2913,9 @@ function connectSocket() {
     reconnectionDelay: 1000,
     timeout: 20000,
   });
+  // Premium: wires the upgrade modal, the Stripe return handler and the live
+  // `helper:quota` pushes (daily Venory message budget).
+  initPremiumClient({ getState: () => state, setState, showToast, tx, escapeHtml, socket: s });
   let hadConnection = false;
   let wasDisconnected = false;
   s.on('connect', () => {
@@ -5573,6 +5580,10 @@ function renderMain() {
             <span class="left-bar-icon" aria-hidden="true">${ICON_SETTINGS}</span>
             <span class="left-bar-label">${t('settings')}</span>
           </a>
+          <button type="button" class="left-bar-item premium-left-bar ${isPremiumUser() ? 'is-premium' : ''}" data-premium-open="nav" title="${tx('premiumTitle', 'Upgrade to Premium')}">
+            <span class="left-bar-icon-wrap"><span class="left-bar-icon" aria-hidden="true">\u2728</span>${isPremiumUser() ? '' : `<span class="left-bar-badge premium-badge-dot"></span>`}</span>
+            <span class="left-bar-label">${tx('premiumNavLabel', 'Premium')}</span>
+          </button>
           ${isNativeApp() ? '' : `
           <a href="/install/" target="_self" class="left-bar-item" title="Install the app">
             <span class="left-bar-icon" aria-hidden="true">${ICON_DOWNLOAD}</span>
@@ -5725,6 +5736,7 @@ function renderProfileView(userId) {
   if (pv.error) return `<div class="profile-view-error">${escapeHtml(pv.error)}</div>`;
   if (pv.loading || !pv.profile) return '<div class="profile-view-loading">' + t('loading') + '</div>';
   const profile = pv.profile;
+  const isOwnProfile = profile.id === state.user?.id;
   const avatarUrl = (profile.avatar_url && String(profile.avatar_url).trim()) ? profile.avatar_url : getDefaultAvatarUrl(profile.id);
   const chatHref = `/chat/${encodeURIComponent(userId)}`;
   return `
@@ -5733,6 +5745,7 @@ function renderProfileView(userId) {
         <a href="${chatHref}" class="profile-view-back">← ${t('chat')}</a>
       </div>
       <div class="profile-view-body settings-form">
+        ${isOwnProfile ? premiumBannerHtml({ compact: true }) : ''}
         <div class="profile-view-avatar-wrap">
           <img src="${escapeHtml(avatarUrl)}" data-fallback="${getDefaultAvatarUrl(profile.id).replace(/"/g, '&quot;')}" onerror="this.onerror=null;if(this.dataset.fallback)this.src=this.dataset.fallback" alt="" class="profile-view-avatar" />
         </div>
@@ -6918,6 +6931,7 @@ function renderChatArea() {
     </div>
     ${`
     <div class="composer composer-safe-area composer-profile-view ${!isFriend(route.dmUserId) ? 'composer-no-files' : ''}" id="composer-drop-zone" data-can-send-files="${isFriend(route.dmUserId)}">
+      <div id="premium-quota-bar" class="premium-quota-bar"${venoryQuotaBarHidden()}>${quotaBarHtml()}</div>
       <div class="composer-row">
         <div class="composer-input-wrap">
           <textarea id="composer-input" placeholder="Message…" rows="1">${escapeHtml(getDraft('dm', route.dmUserId))}</textarea>
@@ -7087,11 +7101,11 @@ function renderChatArea() {
               <div class="upload-progress-bar" id="upload-progress-bar"></div>
             </div>
           </div>
+          <div id="premium-quota-bar" class="premium-quota-bar"${venoryQuotaBarHidden()}>${quotaBarHtml()}</div>
           <div class="composer-row">
             <div class="composer-input-wrap">
               <textarea id="composer-input" placeholder="Message…" rows="1">${escapeHtml(getDraft(roomType, draftRoomId))}</textarea>
-            </div>
-            <div class="composer-actions">
+            </div>            <div class="composer-actions">
               ${'' /* command-mode toggle removed — commands are always on */}
               <button type="button" id="composer-mic" title="Record voice message" ${(roomType === 'dm' && !isFriend(state.dmUserId)) ? 'disabled' : ''}><span class="icon" aria-hidden="true">${ICON_MIC}</span></button>
               <button type="button" id="attach-file" title="Attach file"><span class="icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span></button>
@@ -9038,6 +9052,27 @@ async function handleSlashCommand(text, ctx) {
   return false;
 }
 
+/** Is the signed-in user on a paid Venory tier? */
+function isPremiumUser() {
+  return (state.user?.premium_tier || 'free') !== 'free';
+}
+
+/** The Venory quota bar only belongs in the DM with Venory. */
+function venoryQuotaBarHidden(dmUserId = state.dmUserId) {
+  return dmUserId === HELPER_BOT_ID ? '' : ' hidden';
+}
+
+/** Text currently typed in the composer (used to spot an @helper mention). */
+function currentComposerText() {
+  return document.getElementById('composer-input')?.value || '';
+}
+
+/** Free-plan file gate for Venory: the server refuses these uploads, so stop
+ *  them here too and explain instead of letting the upload fail. */
+function venoryUploadGateMsg() {
+  return maybeBlockVenoryUpload({ text: currentComposerText() });
+}
+
 function bindMain() {
   document.addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.chat-codeblock-copy');
@@ -10387,6 +10422,9 @@ function bindMain() {
     // out — surface the toast immediately so they understand why.
     const composerRoomType = state.dmUserId ? 'dm' : 'group';
     if (maybeBlockTimeoutUpload({ roomType: composerRoomType, dmUserId: state.dmUserId, clearPending: false })) return;
+    // Venory file uploads are Premium: explain (and open the upgrade modal)
+    // instead of opening the picker for a file that would be refused.
+    if (venoryUploadGateMsg()) return;
     document.getElementById('file-input')?.click();
   });
   document.getElementById('file-input')?.addEventListener('change', async (e) => {
@@ -10394,6 +10432,8 @@ function bindMain() {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    // Same gate again: the picker can also be opened by keyboard or drag-drop.
+    if (venoryUploadGateMsg()) return;
     // Belt-and-braces: even if the picker was opened (e.g. before the
     // timeout fired or via keyboard shortcut) drop the chosen file once we
     // know the user is timed out instead of staging something we won't be
@@ -10526,6 +10566,7 @@ function bindMain() {
       setState({ replyTo: null });
       if (roomType === 'dm') loadMessages('dm', roomId).then(render);
     }).catch((err) => {
+      if (handleUpgradeRequired(err)) return;
       if (err?.code === 'AI_MOD_BLOCK') {
         showAiModerationModal(err.reason || err.data?.reason || '');
         return;
@@ -10614,6 +10655,8 @@ function bindMain() {
       // Drag-drop uploads directly without going through the composer pill,
       // so this is the right place to bail out when the user is timed out.
       if (maybeBlockTimeoutUpload({ roomType, dmUserId: state.dmUserId, clearPending: false })) return;
+      // …and the same for the Venory Premium file gate.
+      if (venoryUploadGateMsg()) return;
       const file = await prepareFileForUpload(rawFile);
       if (!file) return;
       const roomId = state.dmUserId ? state.convId : state.panel;
@@ -10644,6 +10687,7 @@ function bindMain() {
           if (roomType === 'dm') loadMessages('dm', roomId).then(render);
         })
         .catch((err) => {
+          if (handleUpgradeRequired(err)) return;
           if (err?.code === 'AI_MOD_BLOCK') {
             showAiModerationModal(err.reason || err.data?.reason || '');
             return;
@@ -11826,6 +11870,7 @@ function renderSettingsContent() {
           </div>
       ` : ''}
       ${tab === 'profile' ? `
+          ${settingsPremiumHtml()}
           <form id="profile-form" class="settings-form">
         <label>${t('avatar')}</label>
         <div class="settings-avatar-drop-zone" id="settings-avatar-drop-zone">

@@ -47,7 +47,7 @@ export function sessionMiddleware() {
     rolling: true,
     cookie: {
       /* SameSite=None; Secure by default so the session cookie is sent when the app is embedded in an iframe. Set ALLOW_IFRAME=false to use SameSite=Lax instead. */
-      sameSite: process.env.ALLOW_IFRAME === 'false' ? 'lax' : 'none',
+      sameSite: (process.env.ALLOW_IFRAME === 'false' || process.env.COOKIE_INSECURE === 'true') ? 'lax' : 'none',
       secure: process.env.COOKIE_INSECURE === 'true' ? false : (process.env.ALLOW_IFRAME === 'false' ? process.env.NODE_ENV === 'production' : true),
       maxAge: SEVEN_DAYS_MS,
       httpOnly: true,
@@ -77,6 +77,8 @@ export function tokenAuthMiddleware(req, res, next) {
   next();
 }
 
+import { getUserTier, tierLimits } from './premium.js';
+
 export function requireAuth(req, res, next) {
   if (req.session?.userId) return next();
   const token = extractToken(req);
@@ -96,6 +98,7 @@ const PERM_COLS = 'can_send_inbox, can_broadcast, can_edit_docs, can_kick, can_d
 
 function normalizeUser(u) {
   if (!u) return null;
+  const userTier = getUserTier({ id: u.id, username: u.username });
   return {
     ...u,
     is_allowed: !!u.is_allowed,
@@ -110,6 +113,11 @@ function normalizeUser(u) {
     can_unlimited_edit_recall: !!u.can_unlimited_edit_recall,
     can_see_whispers: !!u.can_see_whispers,
     chatbox_style: u.chatbox_style || 'default',
+    // Premium tier (resolved from the Stripe subscription on the billing
+    // worker, cache-backed and synchronous). The client uses this to render
+    // upgrade UI and to pre-check Venory limits before sending.
+    premium_tier: userTier,
+    premium_limits: tierLimits(userTier),
   };
 }
 
