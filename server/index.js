@@ -1703,14 +1703,17 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
   const io = app.get('io');
   const roomKey = presenceRoomKeyForRoom(roomType, roomId);
   // Only guard runs that target THIS DM's own gateway session. Session-routed
-  // sends run in a different gateway session (and the bridge serializes per
-  // conversation anyway) — blocking them while a DM run is active made every
-  // routed send fail silently. OpenCode has no session routing: it always
-  // answers in the DM conversation, so it is treated as the DM lane even if a
-  // stale OpenClaw session selection is persisted.
+  // sends run in a different backend session (and the bridge serializes per
+  // session anyway) — blocking them while a DM run is active made every
+  // routed send fail silently.
   const agentMode = getAgentMode();
-  const routedSession = roomType === 'dm' && agentMode === 'openclaw' ? getAgentSession() : roomType === 'dm' && agentMode === 'codex' ? getCodexSession() : '';
-  const sessionRouted = agentMode === 'codex' ? !!routedSession : (!!routedSession && routedSession !== dmSessionKey(roomId));
+  const routedSession = roomType !== 'dm' ? ''
+    : agentMode === 'openclaw' ? getAgentSession()
+      : agentMode === 'opencode' ? getOpencodeSession()
+        : agentMode === 'codex' ? getCodexSession() : '';
+  const sessionRouted = agentMode === 'openclaw'
+    ? !!routedSession && routedSession !== dmSessionKey(roomId)
+    : (agentMode === 'opencode' || agentMode === 'codex') && !!routedSession;
   if ((!sessionRouted || agentMode === 'codex') && helperActiveByRoom.has(roomKey)) {
     try {
       insertHelperReply(triggerMsgId, 'I\u2019m still working on your previous message in this chat. Press stop, then send this again.', roomType, roomId);
@@ -2296,13 +2299,15 @@ async function routeViaBridge(triggerMsgId, content, convId, agentOpts, active, 
   if (active) active.taskId = taskId;
   // Capture the routing target at task-creation time: if the owner switches
   // back to the DM while the task runs, the reply must still follow the
-  // session it was sent to (and must not be inserted into the DM). OpenCode
-  // has no session routing — it always answers in the DM conversation.
+  // backend session it was sent to (and must not be inserted into the DM).
   const isOpencode = mode === 'opencode';
   const isCodex = mode === 'codex';
   const taskAgentSession = (isOpencode || isCodex) ? undefined : (getAgentSession() || undefined);
+  const taskOpencodeSession = isOpencode ? (getOpencodeSession() || undefined) : undefined;
   const taskCodexSession = isCodex ? (getCodexSession() || undefined) : undefined;
-  const taskSessionRouted = isCodex ? !!taskCodexSession : (!!taskAgentSession && taskAgentSession !== dmSessionKey(convId));
+  const taskSessionRouted = isCodex ? !!taskCodexSession
+    : isOpencode ? !!taskOpencodeSession
+      : (!!taskAgentSession && taskAgentSession !== dmSessionKey(convId));
   let resolveTask;
   const taskPromise = new Promise((resolve) => { resolveTask = resolve; });
   const timer = setTimeout(() => {
@@ -2344,7 +2349,7 @@ async function routeViaBridge(triggerMsgId, content, convId, agentOpts, active, 
       opencodeModel: isOpencode ? (agentOpts?.opencodeModel || undefined) : undefined,
       codexModel: isCodex ? (agentOpts?.codexModel || undefined) : undefined,
       agentSession: taskAgentSession,
-      opencodeSession: isOpencode ? (getOpencodeSession() || undefined) : undefined,
+      opencodeSession: taskOpencodeSession,
       codexSession: isCodex ? (getCodexSession() || undefined) : undefined,
       attachment: attachment || undefined,
     });
@@ -2355,6 +2360,7 @@ async function routeViaBridge(triggerMsgId, content, convId, agentOpts, active, 
       // conversation, or "This DM (jchat)" accumulates every session's traffic.
       if (!taskSessionRouted) insertHelperReply(triggerMsgId, result.text.trim(), 'dm', convId);
       else if (isCodex) io.to(`dm:${convId}`).emit('agent:codex:session:updated', { key: taskCodexSession });
+      else if (isOpencode) io.to(`dm:${convId}`).emit('agent:opencode:session:updated', { key: taskOpencodeSession });
       return { status: 'replied' };
     }
     if (result.kind === 'error') {
@@ -3663,13 +3669,19 @@ app.post('/api/conversations/:convId/messages', requireAuth, upload.single('file
   }
   // Session-switched sends (HTTP fallback): mirror the socket path — route
   // to the selected session without persisting into this DM conversation.
-  const routedSession = getAgentSession();
+  const agentMode = getAgentMode();
+  const routedSession = agentMode === 'openclaw' ? getAgentSession()
+    : agentMode === 'opencode' ? getOpencodeSession()
+      : agentMode === 'codex' ? getCodexSession() : '';
+  const hasRoutedSession = agentMode === 'openclaw'
+    ? !!routedSession && routedSession !== dmSessionKey(req.params.convId)
+    : (agentMode === 'opencode' || agentMode === 'codex') && !!routedSession;
   const sessionRouted = otherId === HELPER_USER_ID && user.id !== HELPER_USER_ID
-    && !!routedSession && routedSession !== dmSessionKey(req.params.convId)
+    && hasRoutedSession
     && !req.file && (!msgType || msgType === 'text');
   if (sessionRouted) {
     helperReply(randomUUID(), finalContent, 'dm', req.params.convId, user.id, sanitizeAgentOpts(req.body));
-    return res.status(201).json({ ok: true, routed: true });
+    return res.status(201).json({ ok: true, routed: true, mode: agentMode, sessionKey: routedSession });
   }
   const id = randomUUID();
   const now = Date.now();
@@ -4975,20 +4987,26 @@ io.on('connection', (socket) => {
           });
         }
       }
-      // Session-switched sends: the owner is viewing another OpenClaw session
+      // Session-switched sends: the owner is viewing another backend session
       // (session picker). Route the message to that session WITHOUT persisting
       // it into this DM conversation — the other session's gateway transcript
       // is its home and the session view shows it live. Otherwise the DM
       // ("This DM (jchat)") permanently accumulates traffic from every other
       // session. Files keep the normal path (they need a persisted reference).
-      const routedSession = getAgentSession();
+      const agentMode = getAgentMode();
+      const routedSession = agentMode === 'openclaw' ? getAgentSession()
+        : agentMode === 'opencode' ? getOpencodeSession()
+          : agentMode === 'codex' ? getCodexSession() : '';
+      const hasRoutedSession = agentMode === 'openclaw'
+        ? !!routedSession && routedSession !== dmSessionKey(roomId)
+        : (agentMode === 'opencode' || agentMode === 'codex') && !!routedSession;
       const sessionRouted = otherId === HELPER_USER_ID && socket.userId !== HELPER_USER_ID
-        && !!routedSession && routedSession !== dmSessionKey(roomId)
+        && hasRoutedSession
         && (!msg_type || msg_type === 'text');
       if (sessionRouted) {
         setTyping(socket.userId, presenceRoomKeyForRoom('dm', roomId), false);
         helperReply(randomUUID(), content || '', 'dm', roomId, socket.userId, sanitizeAgentOpts(payload));
-        return ack?.({ ok: true, routed: true });
+        return ack?.({ ok: true, routed: true, mode: agentMode, sessionKey: routedSession });
       }
       const id = randomUUID();
       const now = Date.now();

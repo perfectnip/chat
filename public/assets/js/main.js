@@ -3242,6 +3242,9 @@ function connectSocket() {
     state.agentOpencodeOnline = next;
     updateHelperUiInPlace();
   });
+  s.on('agent:opencode:session:updated', ({ key } = {}) => {
+    if (normalizeAgentMode(state.agentMode) === 'opencode' && state.opencodeSession && state.opencodeSession === key) loadOpencodeSessionHistory(key);
+  });
   s.on('agent:codex:status', ({ online } = {}) => {
     if (!isOwner()) return;
     const next = online !== false;
@@ -6143,10 +6146,12 @@ function helperRun() {
   // (group chats, other DMs, profile views) — even when a session view or
   // picker selection is still set in state.
   if (!isOwner() || !isHelperDm()) return null;
-  // Codex run events are keyed by the selected app-server thread id, not the
-  // JChat DM key or the OpenClaw session view key.
-  if (normalizeAgentMode(state.agentMode) === 'codex' && state.codexSession) {
-    const run = state.sessionRuns[state.codexSession];
+  // OpenCode/Codex run events are keyed by the selected backend session id,
+  // not the JChat DM key or the OpenClaw session view key.
+  const mode = normalizeAgentMode(state.agentMode);
+  const backendSession = mode === 'opencode' ? state.opencodeSession : mode === 'codex' ? state.codexSession : '';
+  if (backendSession) {
+    const run = state.sessionRuns[backendSession];
     return run ? {
       busy: !!(run.busy || run.working),
       working: !!run.working,
@@ -6796,6 +6801,23 @@ function mirrorOwnDmToSessionView(msg) {
   }
   if (msg.msg_type !== 'text') return;
   appendAgentSessionLive({ role: 'user', text: content }, { optimistic: true });
+}
+
+/** A routed send has no JChat message row, so paint it into the selected
+ * backend transcript immediately. The completion event refreshes this
+ * optimistic bubble from the backend's authoritative history. */
+function mirrorRoutedTextToSessionView(text, res) {
+  if (!res?.routed || !text || !isOwner() || !isHelperDm()) return;
+  const mode = normalizeAgentMode(res.mode || state.agentMode);
+  const key = typeof res.sessionKey === 'string' ? res.sessionKey : '';
+  const view = mode === 'opencode' ? state.opencodeSessionView : mode === 'codex' ? state.codexSessionView : state.agentSessionView;
+  if (!key || view?.key !== key) return;
+  const msg = normalizeSessionHistory([{ role: 'user', text, at: Date.now() }])[0];
+  if (!msg) return;
+  msg.id = `routed-${mode}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  view.messages = [...(view.messages || []), msg];
+  view.loading = false;
+  renderKeepingScroll();
 }
 
 /** Map gateway transcript messages (role/text/seq/at) to jchat-shaped
@@ -10792,6 +10814,7 @@ function bindMain() {
             }
             if (res?.message) addMessageLocal(res.message);
             mirrorOwnDmToSessionView(res.message);
+            mirrorRoutedTextToSessionView(text, res);
             clearDraft(roomType, draftRoomId);
             input.value = '';
             resizeComposerInput();
@@ -11027,6 +11050,7 @@ function bindMain() {
           }
           if (res?.message) addMessageLocal(res.message);
           mirrorOwnDmToSessionView(res.message);
+          mirrorRoutedTextToSessionView(text, res);
           clearDraft(roomType, draftRoomId);
           input.value = '';
           resizeComposerInput();
