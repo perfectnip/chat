@@ -6255,6 +6255,15 @@ async function setAgentSession(sessionKey) {
   updateHelperUiInPlace();
   syncSessionView(true);
 }
+async function createAgentSession() {
+  try {
+    const data = await apiPost('/api/agent-session-create', { title: 'New jchat session' });
+    if (data?.session?.key) state.agentSessions = [data.session, ...(state.agentSessions || []).filter((s) => s.key !== data.session.key)];
+    state.agentSession = data?.current || data?.session?.key || '';
+    updateHelperUiInPlace();
+    syncSessionView(true);
+  } catch (err) { showToast(err?.message || 'Could not create session', 'error'); }
+}
 
 // ── OpenClaw session view (page replacement) ────────────────────────────────
 // When the owner picks a session in the picker, the DM page is replaced by
@@ -6436,6 +6445,15 @@ async function setOpencodeSession(id) {
   }
   updateHelperUiInPlace();
   syncOpencodeSessionView(true);
+}
+async function createOpencodeSession() {
+  try {
+    const data = await apiPost('/api/opencode-session-create', { title: 'New jchat session' });
+    if (data?.session?.key) state.opencodeSessions = [data.session, ...(state.opencodeSessions || []).filter((s) => s.key !== data.session.key)];
+    state.opencodeSession = data?.current || data?.session?.key || '';
+    updateHelperUiInPlace();
+    syncOpencodeSessionView(true);
+  } catch (err) { showToast(err?.message || 'Could not create session', 'error'); }
 }
 
 function opencodeSessionLabelForKey(key) {
@@ -6860,7 +6878,7 @@ function renderHelperControlBar() {
             <span class="hc-session-trigger-label">${escapeHtml(sessionCurrent)}</span>
             <span class="icon icon-sm hc-session-caret" aria-hidden="true">${ICON_CHEVRON_DOWN}</span>
           </button>
-          <span class="hc-session-menu" role="listbox" hidden>${sessionItemsHtml}
+          <span class="hc-session-menu" role="listbox" hidden>${sessionItemsHtml}<button type="button" class="hc-session-new" data-new-agent-session="1">＋ New session</button>
           </span>
         </span>`;
   const openclawRow = mode === 'openclaw' ? `
@@ -6901,7 +6919,7 @@ function renderHelperControlBar() {
             <span class="hc-session-trigger-label">${escapeHtml(ocSessionCurrent)}</span>
             <span class="icon icon-sm hc-session-caret" aria-hidden="true">${ICON_CHEVRON_DOWN}</span>
           </button>
-          <span class="hc-session-menu" role="listbox" hidden>${ocSessionItemsHtml}
+          <span class="hc-session-menu" role="listbox" hidden>${ocSessionItemsHtml}<button type="button" class="hc-session-new" data-new-opencode-session="1">＋ New session</button>
           </span>
         </span>`;
   const opencodeRow = mode === 'opencode' ? `
@@ -7097,6 +7115,10 @@ if (typeof document !== 'undefined') {
     // OpenCode session option (data-oc-key) — checked before the generic
     // .hc-session-opt (which uses data-key) so the two backends don't collide.
     const ocOpt = target && target.closest ? target.closest('.hc-session-opt[data-oc-key]') : null;
+    const newOc = target && target.closest ? target.closest('[data-new-opencode-session]') : null;
+    const newAgent = target && target.closest ? target.closest('[data-new-agent-session]') : null;
+    if (newOc) { createOpencodeSession(); closeSessionMenus(); return; }
+    if (newAgent) { createAgentSession(); closeSessionMenus(); return; }
     if (ocOpt && picker) {
       setOpencodeSession(ocOpt.dataset.ocKey || '');
       closeSessionMenus();

@@ -1674,6 +1674,19 @@ socket.on('helper:opencode:sessions:get', async (p) => {
     socket.emit('helper:opencode:sessions:result', { reqId, ok: false, error: err.message });
   }
 });
+socket.on('helper:opencode:session:create', async (p) => {
+  const reqId = p?.reqId;
+  if (!reqId) return;
+  try {
+    const title = typeof p?.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : 'New jchat session';
+    const res = await opencodeFetch('POST', '/session', { title }, 20000);
+    const id = res.data?.id;
+    if (res.status < 200 || res.status >= 300 || !id) throw new Error(`opencode session create failed (${res.status})`);
+    socket.emit('helper:opencode:session:create:result', { reqId, ok: true, session: { key: id, label: res.data?.title || title } });
+  } catch (err) {
+    socket.emit('helper:opencode:session:create:result', { reqId, ok: false, error: err.message });
+  }
+});
 // Dynamic model listing: OpenClaw models (from ~/.openclaw/openclaw.json) and
 // OpenCode models (from the local opencode server's /config/providers).
 socket.on('helper:openclaw:models:get', (p) => {
@@ -1745,6 +1758,13 @@ socket.on('helper:sessions:get', async (p) => {
   } catch (err) {
     socket.emit('helper:sessions:result', { reqId, ok: false, error: err.message });
   }
+});
+socket.on('helper:session:create', async (p) => {
+  const reqId = p?.reqId;
+  if (!reqId) return;
+  const suffix = Date.now().toString(36);
+  const key = `agent:main:jchat-${suffix}`;
+  socket.emit('helper:session:create:result', { reqId, ok: true, session: { key, label: 'New session' } });
 });
 // Owner session history: server asks the bridge to fetch a session's recent
 // messages from the gateway (sessions.get) so the chat page can replace the

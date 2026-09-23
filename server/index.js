@@ -1898,6 +1898,13 @@ function registerBridgeSocket(socket) {
     bridgeReqWaiters.delete(p.reqId);
     w.resolve(p);
   });
+  socket.on('helper:session:create:result', (p) => {
+    const w = bridgeReqWaiters.get(p?.reqId);
+    if (!w) return;
+    clearTimeout(w.timer);
+    bridgeReqWaiters.delete(p.reqId);
+    w.resolve(p);
+  });
   // Session history: bridge answers the server's sessions.get request.
   socket.on('helper:sessions:history:result', (p) => {
     const w = bridgeReqWaiters.get(p?.reqId);
@@ -1908,6 +1915,13 @@ function registerBridgeSocket(socket) {
   });
   // OpenCode session list + history: bridge answers the server's request.
   socket.on('helper:opencode:sessions:result', (p) => {
+    const w = bridgeReqWaiters.get(p?.reqId);
+    if (!w) return;
+    clearTimeout(w.timer);
+    bridgeReqWaiters.delete(p.reqId);
+    w.resolve(p);
+  });
+  socket.on('helper:opencode:session:create:result', (p) => {
     const w = bridgeReqWaiters.get(p?.reqId);
     if (!w) return;
     clearTimeout(w.timer);
@@ -2709,6 +2723,15 @@ app.post('/api/agent-session', requireAuth, (req, res) => {
   io.to('bridge:openclaw').emit('helper:session:sync', { sessionKey: current, dmConvId: getHelperDmConvId() });
   res.json({ current, bridgeOnline: isBridgeOnline(), bridgeEnabled: OPENCLAW_BRIDGE_ENABLED });
 });
+app.post('/api/agent-session-create', requireAuth, async (req, res) => {
+  const user = getCurrentUser(req);
+  if (user.id !== OPENCLAW_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+  const result = await bridgeRequest('helper:session:create', { title: req.body?.title });
+  if (!result?.ok || !result.session?.key) return res.status(502).json({ error: result?.error || 'session create failed' });
+  const current = setAgentSession(result.session.key);
+  req.app.get('io').to('bridge:openclaw').emit('helper:session:sync', { sessionKey: current, dmConvId: getHelperDmConvId() });
+  res.json({ current, session: result.session, bridgeOnline: isBridgeOnline() });
+});
 
 // Owner-only: chat history of a selected OpenClaw session (via the bridge →
 // gateway sessions.get). Used to replace the DM page with the selected
@@ -2750,6 +2773,14 @@ app.post('/api/opencode-session', requireAuth, (req, res) => {
   const key = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
   const current = setOpencodeSession(key);
   res.json({ current, bridgeOnline: isBridgeOnline() });
+});
+app.post('/api/opencode-session-create', requireAuth, async (req, res) => {
+  const user = getCurrentUser(req);
+  if (user.id !== OPENCLAW_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+  const result = await bridgeRequest('helper:opencode:session:create', { title: req.body?.title }, 25000);
+  if (!result?.ok || !result.session?.key) return res.status(502).json({ error: result?.error || 'session create failed' });
+  const current = setOpencodeSession(result.session.key);
+  res.json({ current, session: result.session, bridgeOnline: isBridgeOnline() });
 });
 
 // Owner-only: chat history of a selected OpenCode session (via the bridge →
