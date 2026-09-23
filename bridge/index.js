@@ -57,14 +57,29 @@ const MODEL = process.env.OPENCLAW_MODEL || 'openclaw/default';
 const GATEWAY_WS_URL = process.env.OPENCLAW_GATEWAY_WS_URL
   || OPENCLAW_GATEWAY_URL.replace(/\/v\d+\/?$/, '').replace(/^http/, 'ws');
 
+// --- OpenCode server (local `opencode serve`) ------------------------------
+// A second backend for the owner's DM assistant: instead of the OpenClaw
+// gateway, route through a locally-running `opencode serve` HTTP server
+// (https://opencode.ai/docs/server/). The bridge talks to it over HTTP with
+// optional basic auth, keeping the OpenCode token on this machine just like
+// the OpenClaw gateway token.
+const OPENCODE_SERVER_URL = (process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:4096').replace(/\/+$/, '');
+const OPENCODE_SERVER_USERNAME = process.env.OPENCODE_SERVER_USERNAME || 'opencode';
+const OPENCODE_SERVER_PASSWORD = process.env.OPENCODE_SERVER_PASSWORD || '';
+const OPENCODE_ENABLED = !!OPENCODE_SERVER_URL;
+const OPENCODE_TIMEOUT_MS = Number(process.env.OPENCODE_TIMEOUT_MS || 36 * 60 * 60 * 1000);
+const OPENCODE_SYSTEM_NOTE = 'Message source: jchat — this message came from jimmyqrg in a private DM to the Venory helper bot on the jchat school chat app.';
+
 // Mirror of the server's validated option sets (defense in depth: the server
 // already sanitizes these before emitting `helper:task`, but we re-check so a
 // bad value can never reach the gateway header/body).
-const VALID_MODELS = new Set([
-  'deepseek/deepseek-v4-pro',
-  'deepseek/deepseek-v4-flash',
-]);
 const VALID_EFFORTS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'adaptive', 'max', 'ultra']);
+
+// Model ids are `provider/model` (e.g. `deepseek/deepseek-v4-pro`,
+// `opencode-go/deepseek-v4-pro`). They are now listed dynamically from the
+// backends; here we only enforce a sane shape so a bad value can't reach the
+// gateway/opencode body.
+const MODEL_ID_RE = /^[a-zA-Z0-9._\-\/]{1,100}$/;
 
 // --- message source note ------------------------------------------------------
 // Every task that reaches this bridge arrives as a jchat DM from the owner
@@ -502,7 +517,7 @@ async function runAgentOnce(task, controller) {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${OPENCLAW_GATEWAY_TOKEN}`,
   };
-  if (task.model && VALID_MODELS.has(task.model)) {
+  if (task.model && MODEL_ID_RE.test(task.model)) {
     headers['x-openclaw-model'] = task.model;
   }
   let content = String(task.content);
@@ -574,6 +589,403 @@ async function runAgent(task, controller) {
   throw lastErr;
 }
 
+// --- OpenCode backend ------------------------------------------------------
+// Mirrors the OpenClaw gateway path but against a local `opencode serve`
+// HTTP server (https://opencode.ai/docs/server/). Each jchat DM conversation
+// maps to a persistent OpenCode session so the agent keeps per-DM memory
+// across bridge restarts; the session id is cached on disk next to bridge.env.
+
+const OPENCODE_SESSIONS_PATH = new URL('./opencode-sessions.json', import.meta.url).pathname;
+const opencodeSessions = new Map(); // convId -> sessionId
+
+try {
+  if (existsSync(OPENCODE_SESSIONS_PATH)) {
+    const raw = JSON.parse(readFileSync(OPENCODE_SESSIONS_PATH, 'utf8'));
+    for (const [k, v] of Object.entries(raw || {})) {
+      if (typeof v === 'string' && v) opencodeSessions.set(k, v);
+    }
+    log('opencode sessions loaded:', opencodeSessions.size, 'entries');
+  }
+} catch (err) {
+  log('opencode sessions load failed:', err.message);
+}
+
+function persistOpencodeSessions() {
+  try {
+    writeFileSync(OPENCODE_SESSIONS_PATH, JSON.stringify(Object.fromEntries(opencodeSessions)));
+  } catch (err) {
+    log('opencode sessions persist failed:', err.message);
+  }
+}
+
+function opencodeAuthHeaders(extra = {}) {
+  const headers = { ...extra };
+  if (OPENCODE_SERVER_PASSWORD) {
+    headers['Authorization'] = 'Basic ' + Buffer.from(`${OPENCODE_SERVER_USERNAME}:${OPENCODE_SERVER_PASSWORD}`).toString('base64');
+  }
+  return headers;
+}
+
+/** Raw JSON request to the OpenCode server (no built-in timeout; the only
+ *  deadline is OPENCODE_TIMEOUT_MS / abort). Used for the long message POST
+ *  so agent runs aren't cut off mid-flight — same rationale as the OpenClaw
+ *  gatewayRequestJson helper. */
+function opencodeRequest(method, path, body, controller) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(path, OPENCODE_SERVER_URL + '/');
+    const mod = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    let settled = false;
+    let timer = null;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn(arg);
+    };
+    const headers = opencodeAuthHeaders();
+    const payload = body ? JSON.stringify(body) : null;
+    if (payload) headers['Content-Length'] = Buffer.byteLength(payload);
+    const req = mod({
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname + url.search,
+      method,
+      headers,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => finish(resolve, { status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', (e) => finish(reject, e));
+    });
+    req.on('error', (e) => finish(reject, e));
+    timer = setTimeout(() => {
+      finish(reject, Object.assign(new Error(`opencode timed out after ${OPENCODE_TIMEOUT_MS}ms`), { name: 'TimeoutError' }));
+      req.destroy();
+    }, OPENCODE_TIMEOUT_MS);
+    const onAbort = () => {
+      finish(reject, Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      req.destroy();
+    };
+    if (controller.signal.aborted) return onAbort();
+    controller.signal.addEventListener('abort', onAbort, { once: true });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+/** Short JSON request via fetch (health, session create, abort). */
+async function opencodeFetch(method, path, body, timeoutMs = 15000) {
+  const headers = opencodeAuthHeaders(body ? { 'Content-Type': 'application/json' } : {});
+  const res = await fetch(OPENCODE_SERVER_URL + path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const text = await res.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  return { status: res.status, body: text, data };
+}
+
+async function checkOpencodeHealth() {
+  try {
+    const res = await fetch(`${OPENCODE_SERVER_URL}/global/health`, {
+      headers: opencodeAuthHeaders(),
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Get-or-create the OpenCode session for a DM conversation. */
+async function opencodeSessionId(convId) {
+  const existing = opencodeSessions.get(convId);
+  if (existing) return existing;
+  const res = await opencodeFetch('POST', '/session', { title: `jchat DM ${convId}` });
+  const id = res.data?.id;
+  if (res.status < 200 || res.status >= 300 || !id) {
+    throw new Error(`opencode session create failed (${res.status})`);
+  }
+  opencodeSessions.set(convId, id);
+  persistOpencodeSessions();
+  return id;
+}
+
+async function abortOpencodeSession(sessionId) {
+  try {
+    await opencodeFetch('POST', `/session/${encodeURIComponent(sessionId)}/abort`, {}, 10000);
+    return true;
+  } catch (err) {
+    log('opencode abort failed:', err.message);
+    return false;
+  }
+}
+
+async function runOpencodeOnce(task, controller) {
+  const selected = typeof task?.opencodeSession === 'string' ? task.opencodeSession.trim() : '';
+  const sessionId = selected || (await opencodeSessionId(task.convId));
+  let text = String(task.content);
+  const att = task?.attachment;
+  if (att && typeof att?.filename === 'string' && att.filename.trim()) {
+    const saved = await downloadJchatAttachment(att);
+    if (saved?.path) {
+      text = `${text}\n\n[User attached a file: ${saved.name} — saved on your computer at ${saved.path}. Read it with your file tools.]`;
+    } else if (saved?.skipped) {
+      text = `${text}\n\n[User attached a file: ${saved.name} (${saved.sizeBytes} bytes) — too large to download automatically.]`;
+    } else {
+      text = `${text}\n\n[User attached a file: ${att.originalName || att.filename} — it could not be downloaded (unavailable).]`;
+    }
+  }
+  const payload = {
+    system: OPENCODE_SYSTEM_NOTE,
+    parts: [{ type: 'text', text }],
+  };
+  // Optional model override (provider/model → { providerID, modelID }).
+  const ocModel = typeof task?.opencodeModel === 'string' ? task.opencodeModel.trim() : '';
+  if (ocModel && MODEL_ID_RE.test(ocModel)) {
+    const idx = ocModel.indexOf('/');
+    if (idx > 0 && idx < ocModel.length - 1) {
+      payload.model = { providerID: ocModel.slice(0, idx), modelID: ocModel.slice(idx + 1) };
+    }
+  }
+  const { status, body } = await opencodeRequest('POST', `/session/${encodeURIComponent(sessionId)}/message`, payload, controller);
+  if (status < 200 || status >= 300) {
+    throw Object.assign(new Error(`opencode ${status}: ${body.slice(0, 300)}`), { status });
+  }
+  let data;
+  try { data = JSON.parse(body); } catch { throw new Error('opencode returned a non-JSON reply'); }
+  const parts = Array.isArray(data?.parts) ? data.parts : [];
+  const reply = parts
+    .filter((p) => p && p.type === 'text' && typeof p.text === 'string' && p.text.trim())
+    .map((p) => p.text.trim())
+    .join('\n')
+    .trim();
+  if (!reply) throw new Error('opencode returned an empty reply');
+  return reply;
+}
+
+async function runOpencodeAgent(task, controller) {
+  if (controller.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+  try {
+    return await runOpencodeOnce(task, controller);
+  } catch (err) {
+    if (err?.name === 'AbortError' || controller.signal.aborted) throw err;
+    const msg = String(err?.message || '');
+    if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(msg)) {
+      throw new Error('OpenCode server is unreachable (is `opencode serve` running?)');
+    }
+    throw err;
+  }
+}
+
+/** Periodic + on-connect push of OpenCode availability to the server. */
+async function pushOpencodeStatus() {
+  if (!OPENCODE_ENABLED) return;
+  const online = await checkOpencodeHealth();
+  socket.emit('helper:opencode:status', { online });
+}
+
+// --- OpenCode permission + question relay -----------------------------------
+// OpenCode can pause a run to ask the user a question (ask_user-style) or to
+// request tool permission (bash/edit/webfetch). We poll the local OpenCode
+// server for pending requests and surface them in the owner's DM, then send
+// the owner's reply back over HTTP.
+
+const opencodeKnownQuestions = new Map();    // recordId -> { record, convId }
+const opencodeKnownPermissions = new Map();  // recordId -> { record, convId }
+let opencodePollTimer = null;
+
+/** Map an OpenCode session id back to the jchat DM conversation that owns it. */
+function opencodeConvIdFor(sessionId) {
+  for (const [convId, sid] of opencodeSessions) {
+    if (sid === sessionId) return convId;
+  }
+  return dmConvId;
+}
+
+function opencodeQuestionPayload(record, convId) {
+  const questions = (Array.isArray(record.questions) ? record.questions : []).map((q, i) => ({
+    questionId: String(i),
+    header: typeof q?.header === 'string' ? q.header.slice(0, 40) : '',
+    question: typeof q?.question === 'string' ? q.question : '',
+    multiSelect: !!q?.multiple,
+    custom: !!q?.custom,
+    options: (Array.isArray(q?.options) ? q.options : []).map((o) => ({
+      label: typeof o?.label === 'string' ? o.label : '',
+      description: typeof o?.description === 'string' ? o.description : undefined,
+    })).filter((o) => o.label),
+  })).filter((q) => q.question);
+  return { convId, recordId: record.id, sessionKey: record.sessionID || '', questions };
+}
+
+function opencodePermissionPayload(record, convId) {
+  return {
+    convId,
+    recordId: record.id,
+    sessionKey: record.sessionID || '',
+    permission: typeof record?.permission === 'string' ? record.permission : '',
+    patterns: Array.isArray(record?.patterns) ? record.patterns.map((x) => String(x)) : [],
+  };
+}
+
+// --- OpenCode session list / history (mirrors the OpenClaw session picker) ---
+// The OpenClaw control bar has a session picker + size badge + Compact. We
+// expose the same for OpenCode by mapping its sessions/messages onto the same
+// shapes the client already understands.
+
+/** Map an OpenCode session list onto the OpenClaw session shape the client's
+ *  picker + size badge already render. */
+function formatOpencodeSessions(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((s) => {
+      const tokens = s?.tokens || {};
+      const input = typeof tokens.input === 'number' ? tokens.input : 0;
+      const output = typeof tokens.output === 'number' ? tokens.output : 0;
+      const reasoning = typeof tokens.reasoning === 'number' ? tokens.reasoning : 0;
+      return {
+        key: String(s?.id || ''),
+        label: (typeof s?.title === 'string' && s.title) ? s.title : (String(s?.slug || '') || String(s?.id || '')),
+        updatedAt: typeof s?.time?.updated === 'number' ? s.time.updated : 0,
+        status: 'done',
+        hasActiveRun: false,
+        model: (s?.model && typeof s.model.id === 'string') ? s.model.id : '',
+        totalTokens: input + output + reasoning,
+        contextTokens: input,
+        contextTokenBudget: 0,
+      };
+    })
+    .filter((s) => s.key)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 40);
+}
+
+/** Map an OpenCode message list ({ info, parts }[]) onto { role, text, at }. */
+function formatOpencodeHistory(messages) {
+  const out = [];
+  for (const item of (Array.isArray(messages) ? messages : [])) {
+    const info = item?.info;
+    const role = info?.role === 'user' || info?.role === 'assistant' ? info.role : '';
+    if (!role) continue;
+    const parts = Array.isArray(item?.parts) ? item.parts : [];
+    const text = parts
+      .filter((p) => p && p.type === 'text' && typeof p.text === 'string' && !p.synthetic)
+      .map((p) => p.text)
+      .join('\n')
+      .trim();
+    if (!text) continue;
+    const at = typeof info?.time?.created === 'number' ? info.time.created : 0;
+    out.push({ role, text: text.slice(0, 4000), at });
+  }
+  return out;
+}
+
+// --- dynamic model listing -------------------------------------------------
+// The owner's model dropdown is populated from the actual backends instead of
+// a hard-coded list: OpenClaw models come from ~/.openclaw/openclaw.json, and
+// OpenCode models from the local opencode server's /config/providers.
+
+function loadOpenclawModels() {
+  const cfgPath = process.env.OPENCLAW_CONFIG_PATH || join(homedir(), '.openclaw', 'openclaw.json');
+  try {
+    const raw = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    const providers = raw?.models?.providers || {};
+    const allow = raw?.agents?.defaults?.modelPolicy?.allow;
+    const out = [];
+    for (const [pid, p] of Object.entries(providers)) {
+      if (!p || !Array.isArray(p.models)) continue;
+      for (const m of p.models) {
+        if (!m || typeof m.id !== 'string' || !m.id) continue;
+        const fullId = `${pid}/${m.id}`;
+        if (Array.isArray(allow) && allow.length && !allow.includes(fullId)) continue;
+        out.push({ id: fullId, label: (typeof m.name === 'string' && m.name) ? m.name : m.id });
+      }
+    }
+    return out;
+  } catch (err) {
+    log('openclaw models load failed:', err.message);
+    return [];
+  }
+}
+
+async function loadOpencodeModels() {
+  try {
+    const res = await opencodeFetch('GET', '/config/providers', null, 15000);
+    const providers = Array.isArray(res.data?.providers) ? res.data.providers : [];
+    const out = [];
+    for (const p of providers) {
+      const pid = p?.id;
+      if (!pid) continue;
+      const models = p?.models || {};
+      for (const [mid, m] of Object.entries(models)) {
+        out.push({ id: `${pid}/${mid}`, label: (m && typeof m.name === 'string' && m.name) ? m.name : mid });
+      }
+    }
+    return out;
+  } catch (err) {
+    log('opencode models load failed:', err.message);
+    return [];
+  }
+}
+
+async function pollOpencodeRequests() {
+  if (!OPENCODE_ENABLED) return;
+  try {
+    const permRes = await opencodeFetch('GET', '/permission', null, 8000);
+    const perms = Array.isArray(permRes.data) ? permRes.data : [];
+    const seenP = new Set();
+    for (const p of perms) {
+      if (!p || typeof p.id !== 'string' || !p.id) continue;
+      seenP.add(p.id);
+      if (!opencodeKnownPermissions.has(p.id)) {
+        const convId = opencodeConvIdFor(p.sessionID);
+        opencodeKnownPermissions.set(p.id, { record: p, convId });
+        socket.emit('helper:opencode:permission', opencodePermissionPayload(p, convId));
+        log('opencode permission surfaced:', p.id, p.permission);
+      }
+    }
+    for (const [id, entry] of opencodeKnownPermissions) {
+      if (!seenP.has(id)) {
+        opencodeKnownPermissions.delete(id);
+        socket.emit('helper:opencode:permission:resolved', { convId: entry.convId, recordId: id });
+      }
+    }
+  } catch (err) {
+    log('opencode permission poll failed:', err.message);
+  }
+  try {
+    const qRes = await opencodeFetch('GET', '/question', null, 8000);
+    const qs = Array.isArray(qRes.data) ? qRes.data : [];
+    const seenQ = new Set();
+    for (const q of qs) {
+      if (!q || typeof q.id !== 'string' || !q.id) continue;
+      seenQ.add(q.id);
+      if (!opencodeKnownQuestions.has(q.id)) {
+        const convId = opencodeConvIdFor(q.sessionID);
+        opencodeKnownQuestions.set(q.id, { record: q, convId });
+        socket.emit('helper:opencode:question', opencodeQuestionPayload(q, convId));
+        log('opencode question surfaced:', q.id);
+      }
+    }
+    for (const [id, entry] of opencodeKnownQuestions) {
+      if (!seenQ.has(id)) {
+        opencodeKnownQuestions.delete(id);
+        socket.emit('helper:opencode:question:resolved', { convId: entry.convId, recordId: id, status: 'answered' });
+      }
+    }
+  } catch (err) {
+    log('opencode question poll failed:', err.message);
+  }
+}
+
+function startOpencodePolling() {
+  if (opencodePollTimer || !OPENCODE_ENABLED) return;
+  opencodePollTimer = setInterval(pollOpencodeRequests, 2500);
+  pollOpencodeRequests();
+}
+
 // --- task handling (serialized per gateway session lane, typing indicator) ---
 const chains = new Map();         // sessionKey -> Promise (per-session serialization)
 const typingOn = new Map();       // convId -> number of queued tasks
@@ -581,6 +993,8 @@ const activeByConv = new Map();   // convId -> taskId (running task, for agent e
 const activeBySession = new Map(); // gateway sessionKey -> taskId (session-switched tasks)
 const controllers = new Map();        // taskId -> AbortController (for helper:stop)
 const taskSessionKeys = new Map();    // taskId -> gateway sessionKey (gateway-side abort)
+const taskModes = new Map();          // taskId -> 'openclaw' | 'opencode' (backend routing)
+const taskConvs = new Map();          // taskId -> convId (opencode abort target)
 
 // --- gateway session awareness (session switching + live relay) ---------------
 let rpcSeq = 1;
@@ -1080,10 +1494,13 @@ async function handleTask(task) {
     return;
   }
   const { taskId, convId } = task;
-  log('task', taskId, 'conv', convId);
+  const taskMode = task?.mode === 'opencode' ? 'opencode' : 'openclaw';
+  log('task', taskId, 'conv', convId, taskMode);
 
   const controller = new AbortController();
   controllers.set(taskId, controller);
+  taskModes.set(taskId, taskMode);
+  taskConvs.set(taskId, convId);
 
   const sessionKey = resolveTaskSessionKey(task);
   if (typeof task?.agentSession === 'string') {
@@ -1114,7 +1531,7 @@ async function handleTask(task) {
       if (isDmLane) activeByConv.set(convId, taskId);
       activeBySession.set(sessionKey, taskId);
       taskSessionKeys.set(taskId, sessionKey);
-      return runAgent(task, controller);
+      return taskMode === 'opencode' ? runOpencodeAgent(task, controller) : runAgent(task, controller);
     })
     .then((text) => {
       recordReply(sessionKey, text);
@@ -1135,6 +1552,8 @@ async function handleTask(task) {
     .finally(() => {
       controllers.delete(taskId);
       taskSessionKeys.delete(taskId);
+      taskModes.delete(taskId);
+      taskConvs.delete(taskId);
       if (activeByConv.get(convId) === taskId) activeByConv.delete(convId);
       if (activeBySession.get(sessionKey) === taskId) activeBySession.delete(sessionKey);
     });
@@ -1158,6 +1577,8 @@ socket.on('connect', () => {
   // messages; a fresh full reconcile is idempotent (server dedupes).
   lastDmSyncedSeq = 0;
   syncDmFromGateway();
+  pushOpencodeStatus();
+  startOpencodePolling();
 });
 socket.on('disconnect', (reason) => log('disconnected:', reason));
 socket.on('connect_error', (err) => log('connect error:', err.message));
@@ -1176,6 +1597,16 @@ socket.on('helper:stop', (p) => {
     const activeTaskId = activeBySession.get(sk);
     if (activeTaskId) controllers.get(activeTaskId)?.abort();
   }
+  // OpenCode backend: abort the OpenCode session run so the agent actually
+  // stops (destroying our HTTP request alone doesn't stop the server run).
+  // OpenCode has no gateway relays/ask_user, so the OpenClaw-specific zombie
+  // suppression + sessions.abort below don't apply.
+  if (taskId && taskModes.get(taskId) === 'opencode') {
+    const convId = taskConvs.get(taskId);
+    const sid = convId ? opencodeSessions.get(convId) : '';
+    if (sid) abortOpencodeSession(sid);
+    return;
+  }
   // Zombie suppression: the gateway may keep running the turn after our
   // abort (its chatAbortControllers only covers Control-UI-visible runs).
   // Drop assistant relays for this session for a window so a stopped reply
@@ -1192,6 +1623,112 @@ socket.on('helper:stop', (p) => {
     gwRpc('sessions.abort', { key: sk }, 8000)
       .then(() => log('session abort requested for', sk))
       .catch((err) => log('session abort failed:', err.message));
+  }
+});
+// OpenCode permission reply: the owner allowed/denied a tool permission in
+// the DM. Sent back to the OpenCode server so the paused run can continue.
+socket.on('helper:opencode:permission:reply', async (p) => {
+  const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+  const reply = ['once', 'always', 'reject'].includes(p?.reply) ? p.reply : '';
+  if (!recordId || !reply) return;
+  try {
+    await opencodeFetch('POST', `/permission/${encodeURIComponent(recordId)}/reply`, { reply }, 10000);
+    log('opencode permission replied:', recordId, reply);
+  } catch (err) {
+    log('opencode permission reply failed:', err.message);
+  }
+});
+// OpenCode question answer: the owner picked options in the DM. One entry per
+// question (in order), each an array of selected option labels.
+socket.on('helper:opencode:answer', async (p) => {
+  const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+  const answers = Array.isArray(p?.answers) ? p.answers.filter((a) => Array.isArray(a)) : [];
+  if (!recordId || !answers.length) return;
+  try {
+    await opencodeFetch('POST', `/question/${encodeURIComponent(recordId)}/reply`, { answers }, 10000);
+    log('opencode question answered:', recordId);
+  } catch (err) {
+    log('opencode question answer failed:', err.message);
+  }
+});
+// OpenCode question reject: the owner dismissed the question.
+socket.on('helper:opencode:reject', async (p) => {
+  const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+  if (!recordId) return;
+  try {
+    await opencodeFetch('POST', `/question/${encodeURIComponent(recordId)}/reject`, {}, 10000);
+    log('opencode question rejected:', recordId);
+  } catch (err) {
+    log('opencode question reject failed:', err.message);
+  }
+});
+// OpenCode session picker: server asks the bridge to list OpenCode sessions.
+socket.on('helper:opencode:sessions:get', async (p) => {
+  const reqId = p?.reqId;
+  if (!reqId) return;
+  try {
+    const res = await opencodeFetch('GET', '/session', null, 20000);
+    const sessions = formatOpencodeSessions(res.data);
+    socket.emit('helper:opencode:sessions:result', { reqId, ok: true, sessions });
+  } catch (err) {
+    socket.emit('helper:opencode:sessions:result', { reqId, ok: false, error: err.message });
+  }
+});
+// Dynamic model listing: OpenClaw models (from ~/.openclaw/openclaw.json) and
+// OpenCode models (from the local opencode server's /config/providers).
+socket.on('helper:openclaw:models:get', (p) => {
+  const reqId = p?.reqId;
+  if (!reqId) return;
+  socket.emit('helper:openclaw:models:result', { reqId, ok: true, models: loadOpenclawModels() });
+});
+socket.on('helper:opencode:models:get', async (p) => {
+  const reqId = p?.reqId;
+  if (!reqId) return;
+  try {
+    const models = await loadOpencodeModels();
+    socket.emit('helper:opencode:models:result', { reqId, ok: true, models });
+  } catch (err) {
+    socket.emit('helper:opencode:models:result', { reqId, ok: false, error: err.message });
+  }
+});
+// OpenCode session history: server asks the bridge to fetch a session's
+// transcript so the DM can be replaced by that session's conversation.
+socket.on('helper:opencode:sessions:history', async (p) => {
+  const reqId = p?.reqId;
+  const id = typeof p?.id === 'string' ? p.id.trim() : '';
+  if (!reqId || !id) return;
+  try {
+    const res = await opencodeFetch('GET', `/session/${encodeURIComponent(id)}/message?limit=300`, null, 20000);
+    const messages = formatOpencodeHistory(res.data);
+    socket.emit('helper:opencode:sessions:history:result', { reqId, ok: true, id, messages });
+  } catch (err) {
+    socket.emit('helper:opencode:sessions:history:result', { reqId, ok: false, error: err.message });
+  }
+});
+// OpenCode compact: owner tapped Compact → summarize that session on the
+// OpenCode server (opencode's equivalent of OpenClaw's sessions.compact).
+socket.on('helper:opencode:compact', async (p) => {
+  let id = typeof p?.id === 'string' ? p.id.trim() : '';
+  const convId = typeof p?.convId === 'string' ? p.convId.trim() : '';
+  // No explicit session id → compact the DM conversation's own OpenCode session.
+  if (!id && convId) id = opencodeSessions.get(convId) || '';
+  if (!id) return;
+  try {
+    // summarize requires the session's provider/model; read it from the session.
+    const sess = await opencodeFetch('GET', `/session/${encodeURIComponent(id)}`, null, 10000);
+    const model = sess.data?.model;
+    const body = (model && model.providerID && model.id)
+      ? { providerID: model.providerID, modelID: model.id }
+      : undefined;
+    if (!body) {
+      socket.emit('helper:opencode:compact:result', { convId: dmConvId, id, ok: false, error: 'session has no model' });
+      return;
+    }
+    await opencodeFetch('POST', `/session/${encodeURIComponent(id)}/summarize`, body, 60000);
+    socket.emit('helper:opencode:compact:result', { convId: dmConvId, id, ok: true, message: 'Session summarized' });
+  } catch (err) {
+    log('opencode compact failed:', err.message);
+    socket.emit('helper:opencode:compact:result', { convId: dmConvId, id, ok: false, error: String(err.message).slice(0, 200) });
   }
 });
 // Owner session picker: server asks the bridge to build the session list.
@@ -1321,4 +1858,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 log('bridge starting, target:', JCHAT_URL);
+if (OPENCODE_ENABLED) {
+  log('opencode backend:', OPENCODE_SERVER_URL);
+}
 connectGatewayWs();

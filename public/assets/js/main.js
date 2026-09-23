@@ -124,6 +124,10 @@ let state = {
   agentMode: 'openclaw', // 'openclaw' (full assistant) | 'basic' (DeepSeek helper) — server-persisted
   agentBridgeOnline: true,
   agentBridgeEnabled: true,
+  agentOpencodeOnline: true,
+  agentOpenclawModels: [], // dynamic model list for OpenClaw (fetched from the gateway config)
+  agentOpencodeModels: [], // dynamic model list for OpenCode (fetched from opencode providers)
+  agentOpencodeModel: typeof localStorage !== 'undefined' ? (localStorage.getItem('agent_opencode_model') || 'opencode-go/deepseek-v4-pro') : 'opencode-go/deepseek-v4-pro',
   helperRuns: {}, // roomKey -> { busy, working, done, tools: [{id,name,title,status,meta}] }
   sessionRuns: {}, // gateway sessionKey -> { busy, working, done, tools: [...] } (per-session live state)
   // ask_user questions surfaced from the gateway (rendered as a tappable
@@ -133,6 +137,21 @@ let state = {
   helperQuestionSending: {}, // `${recordId}:${questionId}` -> true while resolving
   helperQuestionErrors: {}, // `${recordId}:${questionId}` -> error text
   helperCompacting: false, // Compact button busy state (sessions.compact in flight)
+  // OpenCode ask_user questions + tool permissions (surfaced from the local
+  // opencode server via the bridge). Rendered above the composer like the
+  // OpenClaw question panel, but keyed separately.
+  opencodeQuestions: {}, // recordId -> { convId, recordId, sessionKey, questions: [...] }
+  opencodeQuestionSelections: {}, // `${recordId}:${questionId}` -> [labels]
+  opencodeQuestionCustom: {}, // `${recordId}:${questionId}` -> free-text answer (custom questions)
+  opencodeQuestionSending: {}, // recordId -> true while sending the whole record's answers
+  opencodePermissions: {}, // recordId -> { convId, recordId, permission, patterns }
+  opencodePermissionSending: {}, // recordId -> true while replying
+  // OpenCode session picker (mirrors the OpenClaw session picker): list,
+  // selection, and history view for the local opencode backend.
+  opencodeSessions: [], // [{ key, label, updatedAt, model, totalTokens, contextTokens }]
+  opencodeSession: '', // selected OpenCode session id ('' = per-DM default)
+  opencodeSessionView: null, // { key, label, messages, loading, error, loadedAt }
+  opencodeCompacting: false,
 };
 
 if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
@@ -2760,7 +2779,7 @@ function isFriendRequestPending(userId) {
  *  - Resolves with `{ message }` on success or `{ error }` on server rejection.
  *  - Rejects only on transport / network failures.
  */
-async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTimeoutMs = 12000, agent_model, agent_effort }) {
+async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTimeoutMs = 12000, agent_model, agent_effort, agent_opencode_model }) {
   const socket = state.socket;
   const socketReady = socket && socket.connected;
   // AI moderation can take a couple of seconds, especially on cold starts or
@@ -2773,6 +2792,7 @@ async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTi
         const payload = { roomType, roomId, content: text, reply_to_id };
         if (agent_model) payload.agent_model = agent_model;
         if (agent_effort) payload.agent_effort = agent_effort;
+        if (agent_opencode_model) payload.agent_opencode_model = agent_opencode_model;
         socket.emit('message:send', payload, (r) => {
           clearTimeout(timer);
           resolve(r);
@@ -2794,6 +2814,7 @@ async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTi
   if (reply_to_id) body.reply_to_id = reply_to_id;
   if (agent_model) body.agent_model = agent_model;
   if (agent_effort) body.agent_effort = agent_effort;
+  if (agent_opencode_model) body.agent_opencode_model = agent_opencode_model;
   try {
     const data = await apiPost(httpPath, body);
     return data && data.message ? { message: data.message } : (data || {});
@@ -3009,7 +3030,7 @@ function connectSocket() {
   s.on('permissions:changed', () => {
     // Re-pull the user profile so new timeout/permission state is picked up
     // without a full reload. Used for timeouts and perm-grant/revoke.
-    loadMe().then(() => { render(); loadAgentMode(); loadAgentSessions(); }).catch(() => {});
+    loadMe().then(() => { render(); loadAgentMode(); loadAgentSessions(); loadOpencodeSessions(); loadAgentModels(); }).catch(() => {});
     try { loadMyTimeouts?.().then(() => render()); } catch (_) {}
   });
   s.on('message:pinned', ({ room_type, room_id, pinned }) => {
@@ -3185,6 +3206,53 @@ function connectSocket() {
     } else {
       showToast(p?.error || 'Compact failed', 'error');
     }
+  });
+  // OpenCode compact result → toast + reset busy state.
+  s.on('agent:opencode:compact:result', (p) => {
+    state.opencodeCompacting = false;
+    updateHelperUiInPlace();
+    if (p?.ok) {
+      showToast(p.message || 'Session summarized', 'success');
+    } else {
+      showToast(p?.error || 'Summary failed', 'error');
+    }
+  });
+  // OpenCode bridge status: the bridge reports whether the local OpenCode
+  // server is reachable, so the OpenCode mode badge stays live.
+  s.on('agent:opencode:status', ({ online } = {}) => {
+    if (!isOwner()) return;
+    const next = online !== false;
+    if (next === state.agentOpencodeOnline) return; // no change → don't re-render
+    state.agentOpencodeOnline = next;
+    updateHelperUiInPlace();
+  });
+  // OpenCode ask_user questions (bridge → owner). Same tappable-options shape
+  // as the OpenClaw panel but keyed separately so the two backends don't mix.
+  s.on('agent:opencode:question', (p) => {
+    if (!isOwner() || !p?.recordId || !Array.isArray(p?.questions)) return;
+    state.opencodeQuestions[p.recordId] = p;
+    updateOpencodeRequestPanel();
+  });
+  s.on('agent:opencode:question:resolved', (p) => {
+    if (!p?.recordId) return;
+    delete state.opencodeQuestions[p.recordId];
+    for (const k of Object.keys(state.opencodeQuestionSelections)) {
+      if (k.startsWith(`${p.recordId}:`)) delete state.opencodeQuestionSelections[k];
+    }
+    delete state.opencodeQuestionSending[p.recordId];
+    updateOpencodeRequestPanel();
+  });
+  // OpenCode tool permissions (bridge → owner). Allow once / always / reject.
+  s.on('agent:opencode:permission', (p) => {
+    if (!isOwner() || !p?.recordId) return;
+    state.opencodePermissions[p.recordId] = p;
+    updateOpencodeRequestPanel();
+  });
+  s.on('agent:opencode:permission:resolved', (p) => {
+    if (!p?.recordId) return;
+    delete state.opencodePermissions[p.recordId];
+    delete state.opencodePermissionSending[p.recordId];
+    updateOpencodeRequestPanel();
   });
   // OpenClaw session picker: the bridge pushes a fresh list whenever the
   // gateway session index changes, so the owner's picker stays live without
@@ -4345,6 +4413,7 @@ function render() {
   app.innerHTML = renderMain();
   bindMain();
   updateHelperQuestionPanel();
+  updateOpencodeRequestPanel();
   if (route.page === 'settings') bindSettings();
   if (state._voiceJoined && state._voiceLocalStream) {
     const localVid = document.getElementById('voice-local-video');
@@ -6068,20 +6137,27 @@ function isHelperBusy() {
   return !!(helperRun()?.busy);
 }
 function agentOptsForSend() {
-  return (isOwner() && isHelperDm())
-    ? { agent_model: state.agentModel, agent_effort: state.agentEffort }
-    : {};
+  if (!(isOwner() && isHelperDm())) return {};
+  if (normalizeAgentMode(state.agentMode) === 'opencode') {
+    return { agent_opencode_model: state.agentOpencodeModel };
+  }
+  return { agent_model: state.agentModel, agent_effort: state.agentEffort };
 }
 
 // Load (or refresh) the owner's Venory routing mode from the server. Called
 // once on connect and again after a mode switch. Non-owner users never call it.
+function normalizeAgentMode(m) {
+  return (m === 'basic' || m === 'opencode') ? m : 'openclaw';
+}
+
 async function loadAgentMode() {
   if (!isOwner()) return;
   try {
     const data = await apiGet('/api/agent-mode');
-    state.agentMode = data?.mode === 'basic' ? 'basic' : 'openclaw';
+    state.agentMode = normalizeAgentMode(data?.mode);
     state.agentBridgeOnline = !!data?.bridgeOnline;
     state.agentBridgeEnabled = !!data?.bridgeEnabled;
+    state.agentOpencodeOnline = data?.opencodeOnline !== false;
   } catch (_) {
     // Keep current state on failure (e.g. bridge/session hiccup).
   }
@@ -6090,19 +6166,35 @@ async function loadAgentMode() {
 
 // Persist a mode switch to the server and refresh local state from the reply.
 async function setAgentMode(mode) {
-  if (mode !== 'openclaw' && mode !== 'basic') return;
+  if (mode !== 'openclaw' && mode !== 'opencode' && mode !== 'basic') return;
   const prev = state.agentMode;
   state.agentMode = mode; // optimistic — reflect the click immediately
-  updateHelperUiInPlace();
+  // Switching backends must clear the other backend's session view so the
+  // DM never shows OpenClaw's history while on OpenCode (and vice versa).
+  // A full render (not just the control bar) drops any displayed session view.
+  clearAgentSessionViews();
+  render();
   try {
     const data = await apiPost('/api/agent-mode', { mode });
-    state.agentMode = data?.mode === 'basic' ? 'basic' : 'openclaw';
+    state.agentMode = normalizeAgentMode(data?.mode);
     state.agentBridgeOnline = !!data?.bridgeOnline;
     state.agentBridgeEnabled = !!data?.bridgeEnabled;
+    state.agentOpencodeOnline = data?.opencodeOnline !== false;
   } catch (_) {
     state.agentMode = prev; // revert on failure
+    render();
   }
   updateHelperUiInPlace();
+  // Refresh the active backend's session list so its picker + view are right.
+  if (normalizeAgentMode(state.agentMode) === 'opencode') loadOpencodeSessions();
+  else loadAgentSessions();
+}
+
+/** Drop any in-progress session view from either backend (used on mode switch
+ *  so one backend's chat history never leaks into the other). */
+function clearAgentSessionViews() {
+  if (state.agentSessionView) { state.agentSessionView = null; }
+  if (state.opencodeSessionView) { state.opencodeSessionView = null; }
 }
 
 // Auto-update: poll /api/version; when it changes a new deploy is live, so
@@ -6180,9 +6272,7 @@ function sessionLabelForKey(key) {
 /** Compact token formatting for the control-bar size badge: 264618 → 264.6k. */
 function fmtTokens(n) {
   if (!Number.isFinite(n) || n <= 0) return '';
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
+  return n.toLocaleString('en-US');
 }
 
 /** Size info for the currently viewed agent session (picker selection, or
@@ -6225,6 +6315,12 @@ function isDmSessionKey(key) {
  *  The DM session itself always stays on the normal DM view. force=true
  *  always refetches (picker change, even re-selecting the same session). */
 function syncSessionView(force) {
+  // OpenClaw session view only exists while the OpenClaw backend is selected;
+  // in OpenCode mode a stale OpenClaw selection must never load/render.
+  if (normalizeAgentMode(state.agentMode) !== 'openclaw') {
+    if (state.agentSessionView) state.agentSessionView = null;
+    return;
+  }
   const key = state.agentSession || '';
   const viewing = state.agentSessionView?.key || '';
   if (key && !isDmSessionKey(key)) {
@@ -6296,6 +6392,190 @@ async function loadAgentSessionHistory(key) {
   renderKeepingScroll();
 }
 
+// ── OpenCode session picker + view (mirrors the OpenClaw session machinery) ──
+// OpenCode mode has its own session picker, size badge, Compact, and history
+// view, backed by the local opencode server through the bridge.
+
+async function loadOpencodeSessions() {
+  if (!isOwner()) return;
+  try {
+    const data = await apiGet('/api/opencode-sessions');
+    state.opencodeSessions = Array.isArray(data?.sessions) ? data.sessions : [];
+    state.opencodeSession = typeof data?.current === 'string' ? data.current : '';
+  } catch (_) {
+    // keep current state on failure (bridge/session hiccup)
+  }
+  updateHelperUiInPlace();
+  syncOpencodeSessionView();
+}
+
+// Load the dynamically-listed models for both backends (OpenClaw config +
+// OpenCode providers) so the model dropdowns reflect what's actually available.
+async function loadAgentModels() {
+  if (!isOwner()) return;
+  try {
+    const data = await apiGet('/api/agent-models');
+    if (Array.isArray(data?.openclaw) && data.openclaw.length) state.agentOpenclawModels = data.openclaw;
+    if (Array.isArray(data?.opencode) && data.opencode.length) state.agentOpencodeModels = data.opencode;
+  } catch (_) {
+    // keep current (hard-coded fallback) on failure
+  }
+  updateHelperUiInPlace();
+}
+
+async function setOpencodeSession(id) {
+  const key = typeof id === 'string' ? id : '';
+  const prev = state.opencodeSession;
+  state.opencodeSession = key; // optimistic
+  updateHelperUiInPlace();
+  try {
+    const data = await apiPost('/api/opencode-session', { sessionId: key });
+    state.opencodeSession = typeof data?.current === 'string' ? data.current : '';
+  } catch (_) {
+    state.opencodeSession = prev; // revert on failure
+  }
+  updateHelperUiInPlace();
+  syncOpencodeSessionView(true);
+}
+
+function opencodeSessionLabelForKey(key) {
+  const s = (state.opencodeSessions || []).find((x) => x.key === key);
+  if (s?.label) return s.label;
+  const base = String(key || '');
+  return base.length > 28 ? `${base.slice(0, 25)}…` : base;
+}
+
+function opencodeSessionSizeInfo() {
+  const list = state.opencodeSessions || [];
+  const s = state.opencodeSession ? list.find((x) => x.key === state.opencodeSession) : null;
+  const total = typeof s?.totalTokens === 'number' ? s.totalTokens : 0;
+  const ctx = typeof s?.contextTokens === 'number' && s.contextTokens > 0 ? s.contextTokens : 0;
+  const budget = typeof s?.contextTokenBudget === 'number' && s.contextTokenBudget > 0 ? s.contextTokenBudget : 0;
+  const limit = budget || ctx;
+  const label = state.opencodeSession ? opencodeSessionLabelForKey(state.opencodeSession) : 'This DM (jchat)';
+  return { total, ctx, budget, limit, label };
+}
+
+function currentOpencodeSessionKey() {
+  return state.opencodeSession || '';
+}
+
+function syncOpencodeSessionView(force) {
+  // OpenCode session view only exists while the OpenCode backend is selected;
+  // in OpenClaw mode a stale OpenCode selection must never load/render.
+  if (normalizeAgentMode(state.agentMode) !== 'opencode') {
+    if (state.opencodeSessionView) state.opencodeSessionView = null;
+    return;
+  }
+  const key = state.opencodeSession || '';
+  const viewing = state.opencodeSessionView?.key || '';
+  if (key) {
+    if (force || key !== viewing || !state.opencodeSessionView?.loadedAt) {
+      loadOpencodeSessionHistory(key);
+    }
+  } else if (viewing) {
+    state.opencodeSessionView = null;
+    render();
+  }
+}
+
+async function loadOpencodeSessionHistory(key) {
+  if (!key || !isOwner()) return;
+  const view = state.opencodeSessionView;
+  const isRefresh = view?.key === key && !!view?.loadedAt;
+  state.opencodeSessionView = {
+    key,
+    label: view?.key === key ? (view.label || opencodeSessionLabelForKey(key)) : opencodeSessionLabelForKey(key),
+    messages: isRefresh ? (view.messages || []) : [],
+    loading: !isRefresh,
+    error: '',
+    loadedAt: view?.key === key ? view.loadedAt : 0,
+  };
+  if (!isRefresh) render();
+  try {
+    const data = await apiGet(`/api/opencode-session-history?key=${encodeURIComponent(key)}`);
+    if (!data?.ok) throw new Error(data?.error || 'Failed to load history');
+    if (state.opencodeSession !== key) return; // switched away meanwhile
+    const fetched = normalizeSessionHistory(data.messages || []);
+    state.opencodeSessionView = {
+      key,
+      label: opencodeSessionLabelForKey(key),
+      messages: fetched,
+      loading: false,
+      error: '',
+      loadedAt: Date.now(),
+    };
+  } catch (err) {
+    if (state.opencodeSession !== key) return;
+    state.opencodeSessionView = {
+      ...(state.opencodeSessionView || {}),
+      key,
+      loading: false,
+      error: err?.message || 'Failed to load history',
+    };
+  }
+  renderKeepingScroll();
+}
+
+function renderOpencodeSessionView() {
+  const view = state.opencodeSessionView;
+  const key = state.opencodeSession || '';
+  const list = view?.messages || [];
+  const loading = !!view?.loading;
+  const error = view?.error || '';
+  const label = view?.label || opencodeSessionLabelForKey(key);
+  const emptyContent = loading
+    ? Array(5).fill(0).map((_, i) => `
+        <div class="message-skeleton" key="${i}">
+          <div class="message-skeleton-avatar"></div>
+          <div class="message-skeleton-body">
+            <div class="message-skeleton-line message-skeleton-line-short"></div>
+            <div class="message-skeleton-line"></div>
+            <div class="message-skeleton-line message-skeleton-line-medium"></div>
+          </div>
+        </div>
+      `).join('')
+    : error
+      ? `<div class="messages-empty">Couldn't load this session: ${escapeHtml(error)}</div>`
+      : list.length === 0
+        ? '<div class="messages-empty">No messages yet in this session.</div>'
+        : renderAgentSessionMessages(list);
+  const typingHtml = renderTypingIndicator('dm', state.convId);
+  const draft = state.dmUserId ? getDraft('dm', state.dmUserId) : '';
+  return `
+    <div class="chat-area">
+      <div class="chat-main">
+        <div class="chat-header">
+          <div class="chat-header-title">${escapeHtml(label)}</div>
+          <span class="chat-header-subtitle"><span class="presence-summary">OpenCode session on your Mac · DMs here route to it · pick “This DM (jchat)” to return</span></span>
+        </div>
+        <div class="messages-wrap" data-opencode-session-view="1" data-room-type="dm" data-room-id="${escapeHtml(state.convId || '')}">
+          ${emptyContent}
+        </div>
+        <div class="typing-indicator-slot" data-typing-indicator-slot data-room-type="dm" data-room-id="${escapeHtml(state.convId || '')}">${typingHtml}</div>
+        <button type="button" class="scroll-to-bottom" aria-label="Scroll to bottom" title="Scroll to bottom" style="display:none">
+          <span class="icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></span>
+        </button>
+        ${renderHelperControlBar()}
+        <div class="composer composer-safe-area" id="composer-drop-zone" data-can-send-files="true">
+          <div class="composer-row">
+            <div class="composer-input-wrap">
+              <textarea id="composer-input" placeholder="Message…" rows="1">${escapeHtml(draft)}</textarea>
+            </div>
+            <div class="composer-actions">
+              <button type="button" id="composer-mic" title="Record voice message"><span class="icon" aria-hidden="true">${ICON_MIC}</span></button>
+              <button type="button" id="attach-file" title="Attach file"><span class="icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span></button>
+              <button type="button" id="composer-emoji" title="Emoji" aria-label="Insert emoji"><span class="icon" aria-hidden="true">${ICON_EMOJI}</span></button>
+              <input type="file" id="file-input" class="hidden-input" accept="image/*,video/*,audio/*,*/*" />
+            </div>
+            ${renderSendButton()}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 /** Merge a fresh history snapshot with recently-arrived live messages that
  *  might not be in it yet. Live messages already present in the snapshot
  *  (same role+text within a minute) are dropped. */
@@ -6337,7 +6617,7 @@ function scheduleAgentHistoryRefresh() {
 /** Re-render without yanking the user's scroll position (used for live
  *  appends / background refreshes while the user is reading history). */
 function renderKeepingScroll() {
-  const wrap = document.querySelector('.messages-wrap[data-agent-session-view="1"]');
+  const wrap = document.querySelector('.messages-wrap[data-agent-session-view="1"], .messages-wrap[data-opencode-session-view="1"]');
   if (!wrap) { render(); return; }
   const nearBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
   if (nearBottom) { render(); return; }
@@ -6345,7 +6625,7 @@ function renderKeepingScroll() {
   const prevTop = wrap.scrollTop;
   render();
   requestAnimationFrame(() => {
-    const w = document.querySelector('.messages-wrap[data-agent-session-view="1"]');
+    const w = document.querySelector('.messages-wrap[data-agent-session-view="1"], .messages-wrap[data-opencode-session-view="1"]');
     if (w) w.scrollTop = prevTop + (w.scrollHeight - prevHeight);
   });
 }
@@ -6524,10 +6804,15 @@ function appendAgentSessionLive({ role, text, fileRef, msgType }, opts = {}) {
 
 function renderHelperControlBar() {
   const run = helperRun();
-  const mode = state.agentMode === 'basic' ? 'basic' : 'openclaw';
+  const mode = normalizeAgentMode(state.agentMode);
   const bridgeOnline = state.agentBridgeOnline;
-  const modelOptions = OPENCLAW_MODELS.map((m) =>
+  const opencodeOnline = state.agentOpencodeOnline !== false;
+  const openclawModels = (state.agentOpenclawModels && state.agentOpenclawModels.length) ? state.agentOpenclawModels : OPENCLAW_MODELS;
+  const modelOptions = openclawModels.map((m) =>
     `<option value="${m.id}" ${state.agentModel === m.id ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
+  ).join('');
+  const opencodeModelOptions = (state.agentOpencodeModels || []).map((m) =>
+    `<option value="${m.id}" ${state.agentOpencodeModel === m.id ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
   ).join('');
   const effortOptions = OPENCLAW_EFFORTS.map((e) =>
     `<option value="${e.id}" ${state.agentEffort === e.id ? 'selected' : ''}>${escapeHtml(e.label)}</option>`
@@ -6595,19 +6880,64 @@ function renderHelperControlBar() {
       </div>
       <div class="hc-tools" id="helper-tools-list">${toolsHtml}</div>` : '';
 
-  const bridgeBadge = state.agentBridgeEnabled
-    ? `<span class="hc-bridge ${bridgeOnline ? '' : 'hc-bridge-off'}" id="helper-bridge-badge">${bridgeOnline ? 'bridge online' : 'bridge offline'}</span>`
-    : '';
+  // OpenCode backend: session picker (mirrors OpenClaw's) + a live status
+  // line. No model/effort — the backend runs on the owner's machine.
+  const ocSessionItems = [
+    { key: '', label: 'This DM (jchat)' },
+    ...(state.opencodeSessions || []).map((s) => ({ key: s.key, label: s.label || s.key })),
+  ];
+  const ocSessionItemsHtml = ocSessionItems.map((it) => {
+    const sel = state.opencodeSession === it.key;
+    return `
+        <button type="button" role="option" class="hc-session-opt${sel ? ' is-selected' : ''}" data-oc-key="${escapeHtml(it.key)}" aria-selected="${sel ? 'true' : 'false'}">
+          <span class="hc-session-dot" aria-hidden="true"></span>
+          <span class="hc-session-opt-label">${escapeHtml(it.label)}</span>
+        </button>`;
+  }).join('');
+  const ocSessionCurrent = state.opencodeSession ? opencodeSessionLabelForKey(state.opencodeSession) : 'This DM (jchat)';
+  const ocSessionPickerHtml = `
+        <span class="hc-session-picker hc-session-picker-oc">
+          <button type="button" class="hc-session-trigger" id="opencode-session-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Session" title="${escapeHtml(ocSessionCurrent)}">
+            <span class="hc-session-trigger-label">${escapeHtml(ocSessionCurrent)}</span>
+            <span class="icon icon-sm hc-session-caret" aria-hidden="true">${ICON_CHEVRON_DOWN}</span>
+          </button>
+          <span class="hc-session-menu" role="listbox" hidden>${ocSessionItemsHtml}
+          </span>
+        </span>`;
+  const opencodeRow = mode === 'opencode' ? `
+      <div class="hc-row hc-row-detail">
+        <label class="hc-label">Model
+          <select id="agent-opencode-model-select" class="hc-select">${opencodeModelOptions}</select>
+        </label>
+        <span class="hc-status ${statusClass}" id="helper-status-badge"><span class="hc-status-dot" aria-hidden="true"></span>${escapeHtml(statusLabel)}</span>
+        <div class="hc-tools" id="helper-tools-list">${toolsHtml}</div>
+      </div>
+      <div class="hc-row">
+        <span class="hc-label">Session</span>
+        ${ocSessionPickerHtml}
+        ${state.opencodeSession ? `<span class="hc-note">Viewing <b>${escapeHtml(opencodeSessionLabelForKey(state.opencodeSession))}</b> — DMs here route to it; pick “This DM (jchat)” to return</span>` : ''}
+      </div>` : '';
+
+  let bridgeBadge = '';
+  if (mode === 'openclaw') {
+    bridgeBadge = state.agentBridgeEnabled
+      ? `<span class="hc-bridge ${bridgeOnline ? '' : 'hc-bridge-off'}" id="helper-bridge-badge">${bridgeOnline ? 'bridge online' : 'bridge offline'}</span>`
+      : '';
+  } else if (mode === 'opencode') {
+    bridgeBadge = `<span class="hc-bridge ${opencodeOnline ? '' : 'hc-bridge-off'}" id="helper-bridge-badge">${opencodeOnline ? 'opencode online' : 'opencode offline'}</span>`;
+  }
   // Content size + Compact for the currently viewed session (updates when
   // switching via the picker — updateHelperUiInPlace re-renders this bar).
-  const size = sessionSizeInfo();
+  const size = mode === 'opencode' ? opencodeSessionSizeInfo() : sessionSizeInfo();
   const sizeText = size.total ? (size.limit
     ? `${fmtTokens(size.total)}/${fmtTokens(size.limit)} (${Math.round((size.total / size.limit) * 100)}%)`
     : fmtTokens(size.total) + ' tok') : '';
   const sizeTitle = `${size.label} — content size ${size.total ? size.total.toLocaleString('en-US') + ' tokens' : 'unknown'}${size.limit ? ` of ${size.limit.toLocaleString('en-US')} budget` : ''}${size.ctx ? ` · context window ${size.ctx.toLocaleString('en-US')}` : ''}`;
   const sizeBadge = `<span class="hc-size-badge" id="helper-size-badge" title="${escapeHtml(sizeTitle)}">${sizeText || '—'}</span>`;
-  const compactBtn = mode === 'openclaw'
-    ? `<button type="button" class="hc-compact-btn${state.helperCompacting ? ' is-busy' : ''}" id="helper-compact-btn" title="Compact the session context">${state.helperCompacting ? 'Compacting…' : 'Compact'}</button>`
+  const compactBusy = mode === 'opencode' ? state.opencodeCompacting : state.helperCompacting;
+  const showCompact = mode === 'openclaw' || mode === 'opencode';
+  const compactBtn = showCompact
+    ? `<button type="button" class="hc-compact-btn${compactBusy ? ' is-busy' : ''}" id="helper-compact-btn" title="Compact the session context">${compactBusy ? 'Compacting…' : 'Compact'}</button>`
     : '';
 
   return `
@@ -6616,12 +6946,13 @@ function renderHelperControlBar() {
         <span class="hc-label">Venory</span>
         <div class="hc-mode-toggle" id="agent-mode-toggle" role="radiogroup" aria-label="Venory mode">
           <button type="button" class="hc-mode-opt ${mode === 'openclaw' ? 'is-active' : ''}" data-mode="openclaw">OpenClaw</button>
+          <button type="button" class="hc-mode-opt ${mode === 'opencode' ? 'is-active' : ''}" data-mode="opencode">OpenCode</button>
           <button type="button" class="hc-mode-opt ${mode === 'basic' ? 'is-active' : ''}" data-mode="basic">basic</button>
         </div>
         ${bridgeBadge}
         ${sizeBadge}
         ${compactBtn}
-      </div>${openclawRow}
+      </div>${openclawRow}${opencodeRow}
     </div>
   `;
 }
@@ -6677,6 +7008,18 @@ if (typeof document !== 'undefined') {
     } else if (t && t.id === 'agent-effort-select') {
       state.agentEffort = t.value;
       try { localStorage.setItem('agent_effort', t.value); } catch (_) {}
+    } else if (t && t.id === 'agent-opencode-model-select') {
+      state.agentOpencodeModel = t.value;
+      try { localStorage.setItem('agent_opencode_model', t.value); } catch (_) {}
+    }
+  });
+  // OpenCode custom (free-text) question answers: capture typing so the Send
+  // button can include it without stealing focus from the input.
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (t && t.dataset && t.dataset.ocqCustomRecord && t.dataset.ocqCustomQuestion) {
+      const key = `${t.dataset.ocqCustomRecord}:${t.dataset.ocqCustomQuestion}`;
+      state.opencodeQuestionCustom[key] = t.value;
     }
   });
   // Owner's Venory mode switch (OpenClaw ↔ basic) + custom session picker
@@ -6751,6 +7094,14 @@ if (typeof document !== 'undefined') {
     const target = e.target && e.target.closest ? e.target : null;
     const picker = target && target.closest ? target.closest('.hc-session-picker') : null;
     const opt = target && target.closest ? target.closest('.hc-session-opt') : null;
+    // OpenCode session option (data-oc-key) — checked before the generic
+    // .hc-session-opt (which uses data-key) so the two backends don't collide.
+    const ocOpt = target && target.closest ? target.closest('.hc-session-opt[data-oc-key]') : null;
+    if (ocOpt && picker) {
+      setOpencodeSession(ocOpt.dataset.ocKey || '');
+      closeSessionMenus();
+      return;
+    }
     if (opt && picker) {
       setAgentSession(opt.dataset.key || '');
       closeSessionMenus();
@@ -6776,16 +7127,28 @@ if (typeof document !== 'undefined') {
     setAgentMode(mode);
   });
   // Compact button on the helper control bar → gateway sessions.compact for
-  // the currently viewed session. Result toast via helper:compact:result.
+  // the currently viewed session (OpenClaw) or opencode session summarize.
   document.addEventListener('click', (e) => {
     const t = e.target && e.target.closest ? e.target : null;
     const btn = t && t.closest ? t.closest('#helper-compact-btn') : null;
-    if (!btn || state.helperCompacting || state.agentMode !== 'openclaw') return;
-    const key = currentAgentSessionKey();
-    if (!key) return;
-    state.helperCompacting = true;
-    updateHelperUiInPlace();
-    state.socket?.emit('helper:compact', { sessionKey: key });
+    if (!btn) return;
+    const mode = normalizeAgentMode(state.agentMode);
+    if (mode === 'opencode') {
+      if (state.opencodeCompacting) return;
+      const key = currentOpencodeSessionKey();
+      state.opencodeCompacting = true;
+      updateHelperUiInPlace();
+      // No explicit session selected means the DM's own OpenCode session; the
+      // bridge resolves that from the DM conversation id.
+      state.socket?.emit('helper:opencode:compact', { id: key, convId: key ? '' : (state.convId || '') });
+    } else if (mode === 'openclaw') {
+      if (state.helperCompacting) return;
+      const key = currentAgentSessionKey();
+      if (!key) return;
+      state.helperCompacting = true;
+      updateHelperUiInPlace();
+      state.socket?.emit('helper:compact', { sessionKey: key });
+    }
   });
   // ask_user question panel: tappable options + multi-select send.
   // Delegated so in-place panel refreshes keep working.
@@ -6857,6 +7220,59 @@ if (typeof document !== 'undefined') {
       if (!values.length || state.helperQuestionSending[key]) return;
       trySendRecord(rec, q);
     }
+    // OpenCode question answer: collect every question's selected labels (in
+    // order) and send them all in one reply (opencode rejects partial answers).
+    const ocOpt = t.closest ? t.closest('[data-ocq-record][data-ocq-question][data-ocq-value]') : null;
+    if (ocOpt) {
+      const rec = state.opencodeQuestions[ocOpt.dataset.ocqRecord];
+      const q = rec && (Array.isArray(rec.questions) ? rec.questions : []).find((x) => x.questionId === ocOpt.dataset.ocqQuestion);
+      if (!rec || !q || state.opencodeQuestionSending[rec.recordId]) return;
+      const key = `${rec.recordId}:${q.questionId}`;
+      const sel = state.opencodeQuestionSelections[key] || [];
+      if (q.multiSelect) {
+        const i = sel.indexOf(ocOpt.dataset.ocqValue);
+        if (i >= 0) sel.splice(i, 1); else sel.push(ocOpt.dataset.ocqValue);
+        state.opencodeQuestionSelections[key] = sel;
+      } else {
+        state.opencodeQuestionSelections[key] = [ocOpt.dataset.ocqValue];
+      }
+      updateOpencodeRequestPanel();
+      return;
+    }
+    const ocSend = t.closest ? t.closest('button[data-ocq-send]') : null;
+    if (ocSend) {
+      const rec = state.opencodeQuestions[ocSend.dataset.ocqSend];
+      if (!rec || state.opencodeQuestionSending[rec.recordId]) return;
+      const qs = Array.isArray(rec.questions) ? rec.questions : [];
+      const answers = [];
+      let missing = 0;
+      for (const q of qs) {
+        const key = `${rec.recordId}:${q.questionId}`;
+        const custom = (state.opencodeQuestionCustom[key] || '').trim();
+        const vals = custom ? [custom] : (state.opencodeQuestionSelections[key] || []).slice();
+        if (!vals.length) missing++;
+        answers.push(vals);
+      }
+      if (missing > 0) {
+        showToast(`${missing} question${missing > 1 ? 's' : ''} still unanswered`, 'info');
+        return;
+      }
+      state.opencodeQuestionSending[rec.recordId] = true;
+      updateOpencodeRequestPanel();
+      state.socket?.emit('helper:opencode:answer', { recordId: rec.recordId, answers });
+      return;
+    }
+    // OpenCode tool permission: allow once / always / reject.
+    const ocPerm = t.closest ? t.closest('[data-ocperm-record][data-ocperm-reply]') : null;
+    if (ocPerm) {
+      const recordId = ocPerm.dataset.ocpermRecord;
+      const reply = ocPerm.dataset.ocpermReply;
+      if (!recordId || state.opencodePermissionSending[recordId]) return;
+      state.opencodePermissionSending[recordId] = true;
+      updateOpencodeRequestPanel();
+      state.socket?.emit('helper:opencode:permission:reply', { recordId, reply });
+      return;
+    }
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeSessionMenus();
@@ -6919,6 +7335,79 @@ function updateHelperQuestionPanel() {
   }
 }
 
+/** OpenCode ask_user question + tool-permission panel (owner's helper DM).
+ *  Questions are answered together in one reply (opencode requires every
+ *  question's answer at once); permissions are allow-once/always/reject. */
+function opencodeRequestPanelHtml() {
+  if (!isOwner() || !isHelperDm()) return '';
+  const qRecords = Object.values(state.opencodeQuestions || {})
+    .filter((r) => !r.convId || r.convId === state.convId);
+  const pRecords = Object.values(state.opencodePermissions || {})
+    .filter((r) => !r.convId || r.convId === state.convId);
+  if (!qRecords.length && !pRecords.length) return '';
+
+  const qCards = qRecords.map((rec) => {
+    const qs = (Array.isArray(rec.questions) ? rec.questions : []).map((q) => {
+      const key = `${rec.recordId}:${q.questionId}`;
+      const sel = state.opencodeQuestionSelections[key] || [];
+      const customVal = state.opencodeQuestionCustom[key] || '';
+      const opts = (Array.isArray(q.options) ? q.options : []).map((o) => {
+        const active = !customVal && sel.includes(o.label);
+        return `<button type="button" class="hq-opt${active ? ' is-selected' : ''}" data-ocq-record="${escapeHtml(rec.recordId)}" data-ocq-question="${escapeHtml(q.questionId)}" data-ocq-value="${escapeHtml(o.label)}">${escapeHtml(o.label)}${o.description ? `<span class="hq-opt-desc">${escapeHtml(o.description)}</span>` : ''}</button>`;
+      }).join('');
+      const customInput = q.custom
+        ? `<input type="text" class="hq-custom" data-ocq-custom-record="${escapeHtml(rec.recordId)}" data-ocq-custom-question="${escapeHtml(q.questionId)}" placeholder="Type your answer…" value="${escapeHtml(customVal)}" />`
+        : '';
+      return `<div class="hq-card">
+        ${q.header ? `<div class="hq-head">${escapeHtml(q.header)}</div>` : ''}
+        <div class="hq-text">${escapeHtml(q.question)}</div>
+        <div class="hq-opts">${opts}</div>
+        ${customInput}
+      </div>`;
+    }).join('');
+    const sending = !!state.opencodeQuestionSending[rec.recordId];
+    return `${qs}<div class="hq-sendrow"><button type="button" class="hq-send" data-ocq-send="${escapeHtml(rec.recordId)}" ${sending ? 'disabled' : ''}>${sending ? '…' : 'Send'}</button></div>`;
+  }).join('');
+
+  const pCards = pRecords.map((rec) => {
+    const sending = !!state.opencodePermissionSending[rec.recordId];
+    const pats = (Array.isArray(rec.patterns) ? rec.patterns : []).map((p) => `<div class="hq-perm-pat">${escapeHtml(p)}</div>`).join('');
+    return `<div class="hq-card">
+      <div class="hq-head">🔐 Permission needed</div>
+      <div class="hq-text">Allow <b>${escapeHtml(rec.permission || 'this action')}</b>?</div>
+      ${pats ? `<div class="hq-perm-pats">${pats}</div>` : ''}
+      <div class="hq-opts">
+        <button type="button" class="hq-opt" data-ocperm-record="${escapeHtml(rec.recordId)}" data-ocperm-reply="once" ${sending ? 'disabled' : ''}>Allow once</button>
+        <button type="button" class="hq-opt" data-ocperm-record="${escapeHtml(rec.recordId)}" data-ocperm-reply="always" ${sending ? 'disabled' : ''}>Always allow</button>
+        <button type="button" class="hq-opt hq-opt-reject" data-ocperm-record="${escapeHtml(rec.recordId)}" data-ocperm-reply="reject" ${sending ? 'disabled' : ''}>Reject</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="helper-question-panel" id="opencode-request-panel" role="group" aria-label="OpenCode request">${qCards}${pCards}</div>`;
+}
+
+function updateOpencodeRequestPanel() {
+  const panel = document.getElementById('opencode-request-panel');
+  if (!isOwner() || !isHelperDm()) {
+    if (panel) panel.remove();
+    return;
+  }
+  const chatMain = document.querySelector('.chat-main');
+  if (!chatMain) return;
+  const html = opencodeRequestPanelHtml();
+  if (!html) {
+    if (panel) panel.remove();
+    return;
+  }
+  if (panel) {
+    panel.outerHTML = html;
+  } else {
+    const wrap = chatMain.querySelector('.messages-wrap');
+    if (wrap) wrap.insertAdjacentHTML('afterend', html);
+  }
+}
+
 function renderChatArea() {
   const route = parseRoute();
   const isProfileView = route.dmUserId && route.view === 'profile';
@@ -6962,9 +7451,14 @@ function renderChatArea() {
   // Session view: when the owner has selected another OpenClaw session in
   // the picker, replace the DM page with that session's conversation
   // (fetched from the Mac gateway; the session keeps running untouched).
-  // The DM session itself always renders as the normal DM chat.
-  if (roomType === 'dm' && isHelperDm() && isOwner() && state.agentSession && !isDmSessionKey(state.agentSession) && state.agentSessionView?.key === state.agentSession) {
+  // The DM session itself always renders as the normal DM chat. Only active
+  // while the OpenClaw backend is selected — switching to OpenCode clears it.
+  if (roomType === 'dm' && isHelperDm() && isOwner() && normalizeAgentMode(state.agentMode) === 'openclaw' && state.agentSession && !isDmSessionKey(state.agentSession) && state.agentSessionView?.key === state.agentSession) {
     return renderAgentSessionView();
+  }
+  // OpenCode session view (mirrors the OpenClaw one, backed by opencode).
+  if (roomType === 'dm' && isHelperDm() && isOwner() && normalizeAgentMode(state.agentMode) === 'opencode' && state.opencodeSession && state.opencodeSessionView?.key === state.opencodeSession) {
+    return renderOpencodeSessionView();
   }
 
   // If the DM target is a private user, the server already 403'd when we
@@ -12803,8 +13297,10 @@ async function init() {
     await loadMyTimeouts();
     if (state.user?.is_allowed) loadReportCounts().catch(() => {});
   connectSocket();
-    loadAgentMode();
+    await loadAgentMode();
     loadAgentSessions();
+    loadOpencodeSessions();
+    loadAgentModels();
     initAutoUpdate();
     apiGet('/api/voice/participants').then(({ participants }) => {
       state._voiceParticipantCount = (participants || []).length;

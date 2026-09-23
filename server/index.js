@@ -391,11 +391,22 @@ const openclawBridgeTasks = new Map(); // taskId -> { resolve, timer, convId }
 // after a reload; the bridge pushes live requested/resolved updates.
 const pendingQuestions = new Map(); // recordId -> { convId, recordId, sessionKey, expiresAtMs, questions }
 
+// OpenCode ask_user questions + tool permissions surfaced from the bridge
+// (the local OpenCode server). Kept in memory so the owner's UI can re-render
+// them after a reload, mirroring pendingQuestions for OpenClaw.
+const pendingOpencodeQuestions = new Map();   // recordId -> { convId, recordId, sessionKey, questions }
+const pendingOpencodePermissions = new Map(); // recordId -> { convId, recordId, permission, patterns }
+
+// Whether the bridge's local OpenCode server is reachable. Pushed by the
+// bridge (helper:opencode:status) and reported to the owner's UI so the
+// OpenCode mode can show a live online/offline hint, mirroring OpenClaw's.
+let opencodeOnline = false;
+
 // Agent routing mode for the owner's DMs to Venory. 'openclaw' routes
 // through the private OpenClaw bridge (full assistant); 'basic' uses the
 // normal DeepSeek helper. Persisted in the settings table so it survives
 // restarts, and switchable live from the owner's DM UI.
-const AGENT_MODES = new Set(['openclaw', 'basic']);
+const AGENT_MODES = new Set(['openclaw', 'opencode', 'basic']);
 const AGENT_MODE_DEFAULT = 'openclaw';
 function getAgentMode() {
   try {
@@ -454,6 +465,31 @@ function setAgentSession(key) {
   return v;
 }
 
+// OpenCode session selection: which OpenCode session the owner's DM talks to
+// in OpenCode mode. '' means the DM's own per-DM session (default); anything
+// else is an explicit OpenCode session id (ses_...) routed through the bridge.
+const OPENCODE_SESSION_MAX = 200;
+function getOpencodeSession() {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'opencode_session'").get();
+    const v = row?.value;
+    return (typeof v === 'string' && v && v.length <= OPENCODE_SESSION_MAX) ? v : '';
+  } catch {
+    return '';
+  }
+}
+function setOpencodeSession(key) {
+  const v = typeof key === 'string' ? key.trim() : '';
+  if (v && v.length > OPENCODE_SESSION_MAX) return getOpencodeSession();
+  try {
+    db.prepare(`INSERT INTO settings (key, value) VALUES ('opencode_session', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(v);
+  } catch (err) {
+    console.error('[opencode-session] failed to persist:', err?.message || err);
+  }
+  return v;
+}
+
 // Pending bridge RPC round-trips (server → bridge → server) and the cached
 // session list the bridge pushes on `sessions.changed`.
 const bridgeReqWaiters = new Map(); // reqId -> { resolve, timer }
@@ -488,15 +524,11 @@ function getHelperDmConvId() {
   }
 }
 
-// Model + effort (thinking) options the owner can pick in the DM UI. These
-// are mirrored in the frontend (main.js) and the bridge; the server only
-// validates/relays them so a bad value can't reach the bridge.
-const OPENCLAW_MODELS = new Set([
-  'deepseek/deepseek-v4-pro',
-  'deepseek/deepseek-v4-flash',
-  'claude-cli/claude-opus-4-8',
-]);
+// Effort (thinking) levels are a fixed enum; models are listed dynamically
+// from the backends (OpenClaw config / OpenCode providers), so the server only
+// enforces a sane `provider/model` shape and relays the value to the bridge.
 const OPENCLAW_EFFORTS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'adaptive', 'max', 'ultra']);
+const MODEL_ID_RE = /^[a-zA-Z0-9._\-\/]{1,100}$/;
 
 // In-flight helper responses, keyed by room key (dm:<id> / group:<id>). Used
 // to (a) broadcast "Venory is responding" so every account can show the stop
@@ -507,10 +539,12 @@ const helperActiveByRoom = new Map(); // roomKey -> { kind, taskId, controller }
 function sanitizeAgentOpts(payload) {
   const model = typeof payload?.agent_model === 'string' ? payload.agent_model.trim() : '';
   const effort = typeof payload?.agent_effort === 'string' ? payload.agent_effort.trim() : '';
+  const opencodeModel = typeof payload?.agent_opencode_model === 'string' ? payload.agent_opencode_model.trim() : '';
   const out = {};
-  if (model && OPENCLAW_MODELS.has(model)) out.model = model;
+  if (model && MODEL_ID_RE.test(model)) out.model = model;
   if (effort && OPENCLAW_EFFORTS.has(effort)) out.effort = effort;
-  return (out.model || out.effort) ? out : undefined;
+  if (opencodeModel && MODEL_ID_RE.test(opencodeModel)) out.opencodeModel = opencodeModel;
+  return (out.model || out.effort || out.opencodeModel) ? out : undefined;
 }
 const DEEPSEEK_API = process.env.DEEPSEEK_KEY
   ? 'https://api.deepseek.com/v1/chat/completions'
@@ -1651,8 +1685,11 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
   // Only guard runs that target THIS DM's own gateway session. Session-routed
   // sends run in a different gateway session (and the bridge serializes per
   // conversation anyway) — blocking them while a DM run is active made every
-  // routed send fail silently.
-  const routedSession = roomType === 'dm' ? getAgentSession() : '';
+  // routed send fail silently. OpenCode has no session routing: it always
+  // answers in the DM conversation, so it is treated as the DM lane even if a
+  // stale OpenClaw session selection is persisted.
+  const agentMode = getAgentMode();
+  const routedSession = (roomType === 'dm' && agentMode !== 'opencode') ? getAgentSession() : '';
   const sessionRouted = !!routedSession && routedSession !== dmSessionKey(roomId);
   if (!sessionRouted && helperActiveByRoom.has(roomKey)) {
     try {
@@ -1687,7 +1724,7 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
     });
   }
   const controller = new AbortController();
-  const active = { kind: 'deepseek', taskId: triggerMsgId, controller, sessionKey: getAgentSession() || '' };
+  const active = { kind: 'deepseek', taskId: triggerMsgId, controller, sessionKey: routedSession };
   // Track only DM-lane tasks in the per-room busy map. Session-routed tasks
   // run concurrently (different gateway session) and must not clobber the
   // DM run's entry — the guard above and stop routing read this map for the
@@ -1695,25 +1732,26 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
   if (!sessionRouted) helperActiveByRoom.set(roomKey, active);
   io?.to(roomKey).emit('helper:busy', { status: 'start', taskId: triggerMsgId, roomType, roomId, sessionKey: active.sessionKey });
   try {
-    // ── OpenClaw bridge: the owner's private full assistant (DM only) ──
+    // ── Owner bridge: the owner's private full assistant (DM only) ──
     // The owner's routing mode controls which "Venory" answers: 'openclaw'
-    // (full assistant via the bridge, no silent fallback) or 'basic'
-    // (the normal DeepSeek helper below).
-    if (OPENCLAW_BRIDGE_ENABLED && roomType === 'dm' && userId === OPENCLAW_OWNER_ID && getAgentMode() === 'openclaw') {
+    // (full assistant via the OpenClaw bridge), 'opencode' (full assistant
+    // via the local OpenCode bridge), or 'basic' (the DeepSeek helper below).
+    if (OPENCLAW_BRIDGE_ENABLED && roomType === 'dm' && userId === OPENCLAW_OWNER_ID && (agentMode === 'openclaw' || agentMode === 'opencode')) {
       active.kind = 'bridge';
-      const result = await routeViaOpenClawBridge(triggerMsgId, content, roomId, agentOpts, active);
+      const result = await routeViaBridge(triggerMsgId, content, roomId, agentOpts, active, agentMode);
       // Full assistant answered, the bridge reported an explicit error, or the
       // user stopped the response — the turn is done, no DeepSeek fallback.
       if (result.status === 'replied' || result.status === 'error' || result.status === 'stopped') return;
       // Bridge not connected → surface a clear note instead of silently
       // switching to the basic helper (that silent switch was the confusing
       // "sometimes basic Venory" behavior).
+      const modeLabel = agentMode === 'opencode' ? 'OpenCode' : 'OpenClaw';
       if (result.status === 'offline') {
-        insertHelperReply(triggerMsgId, 'OpenClaw mode is on, but the bridge is offline right now. You can switch to basic Venory for a quick reply, or wait for it to reconnect.', roomType, roomId);
+        insertHelperReply(triggerMsgId, `${modeLabel} mode is on, but the bridge is offline right now. You can switch to basic Venory for a quick reply, or wait for it to reconnect.`, roomType, roomId);
         return;
       }
       // Timeout / empty reply / route error → clear note, no silent fallback.
-      insertHelperReply(triggerMsgId, 'OpenClaw mode is on, but the full assistant did not finish this time. Switch to basic Venory for a fast reply, or try again.', roomType, roomId);
+      insertHelperReply(triggerMsgId, `${modeLabel} mode is on, but the full assistant did not finish this time. Switch to basic Venory for a fast reply, or try again.`, roomType, roomId);
       return;
     }
     if (!DEEPSEEK_API) {
@@ -1868,6 +1906,48 @@ function registerBridgeSocket(socket) {
     bridgeReqWaiters.delete(p.reqId);
     w.resolve(p);
   });
+  // OpenCode session list + history: bridge answers the server's request.
+  socket.on('helper:opencode:sessions:result', (p) => {
+    const w = bridgeReqWaiters.get(p?.reqId);
+    if (!w) return;
+    clearTimeout(w.timer);
+    bridgeReqWaiters.delete(p.reqId);
+    w.resolve(p);
+  });
+  socket.on('helper:opencode:sessions:history:result', (p) => {
+    const w = bridgeReqWaiters.get(p?.reqId);
+    if (!w) return;
+    clearTimeout(w.timer);
+    bridgeReqWaiters.delete(p.reqId);
+    w.resolve(p);
+  });
+  // Dynamic model listing results (OpenClaw + OpenCode).
+  socket.on('helper:openclaw:models:result', (p) => {
+    const w = bridgeReqWaiters.get(p?.reqId);
+    if (!w) return;
+    clearTimeout(w.timer);
+    bridgeReqWaiters.delete(p.reqId);
+    w.resolve(p);
+  });
+  socket.on('helper:opencode:models:result', (p) => {
+    const w = bridgeReqWaiters.get(p?.reqId);
+    if (!w) return;
+    clearTimeout(w.timer);
+    bridgeReqWaiters.delete(p.reqId);
+    w.resolve(p);
+  });
+  // OpenCode compact result → owner toast.
+  socket.on('helper:opencode:compact:result', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    if (!convId) return;
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('agent:opencode:compact:result', {
+      convId,
+      ok: !!p?.ok,
+      message: typeof p?.message === 'string' ? p.message : (p?.ok ? 'Session summarized' : 'Summary failed'),
+      error: typeof p?.error === 'string' ? p.error : '',
+    });
+  });
   // Bridge pushes a fresh session list (on connect, on change, on request).
   // Cache it and nudge the owner's UI so the picker stays live.
   socket.on('helper:sessions:update', (p) => {
@@ -1875,6 +1955,14 @@ function registerBridgeSocket(socket) {
     lastAgentSessions = { sessions: p.sessions.slice(0, 40), ts: Date.now() };
     const io = app.get('io');
     io?.to(`user:${OPENCLAW_OWNER_ID}`).emit('agent:sessions:update', { sessions: lastAgentSessions.sessions });
+  });
+  // OpenCode bridge status: the bridge reports whether its local OpenCode
+  // server is reachable so the owner's UI can show a live hint (mirrors the
+  // OpenClaw bridge badge).
+  socket.on('helper:opencode:status', (p) => {
+    opencodeOnline = !!p?.online;
+    const io = app.get('io');
+    io?.to(`user:${OPENCLAW_OWNER_ID}`).emit('agent:opencode:status', { online: opencodeOnline });
   });
   // Relayed activity from a switched gateway session → owner's DM as a
   // Venory message. Only bridge sockets can reach this handler.
@@ -1950,6 +2038,66 @@ function registerBridgeSocket(socket) {
       questionId: typeof p?.questionId === 'string' ? p.questionId : '',
       error: typeof p?.error === 'string' ? p.error : 'resolve failed',
     });
+  });
+  // OpenCode ask_user questions (bridge → owner). Same shape as the OpenClaw
+  // question panel so the client reuses it, but keyed separately so the two
+  // backends never collide.
+  socket.on('helper:opencode:question', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+    if (!convId || !recordId || !Array.isArray(p?.questions)) return;
+    const questions = p.questions.slice(0, 3).map((q) => ({
+      questionId: typeof q?.questionId === 'string' ? q.questionId : '',
+      header: typeof q?.header === 'string' ? q.header.slice(0, 40) : '',
+      question: typeof q?.question === 'string' ? q.question.slice(0, 500) : '',
+      multiSelect: !!q?.multiSelect,
+      options: Array.isArray(q?.options) ? q.options.slice(0, 4).map((o) => ({
+        label: typeof o?.label === 'string' ? o.label.slice(0, 120) : '',
+        description: typeof o?.description === 'string' ? o.description.slice(0, 200) : undefined,
+      })).filter((o) => o.label) : [],
+    })).filter((q) => q.questionId && q.question);
+    if (!questions.length) return;
+    const payload = { convId, recordId, sessionKey: typeof p?.sessionKey === 'string' ? p.sessionKey : '', questions };
+    pendingOpencodeQuestions.set(recordId, payload);
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('agent:opencode:question', payload);
+  });
+  socket.on('helper:opencode:question:resolved', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+    if (recordId) pendingOpencodeQuestions.delete(recordId);
+    if (!convId) return;
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('agent:opencode:question:resolved', {
+      convId,
+      recordId,
+      status: typeof p?.status === 'string' ? p.status : 'answered',
+    });
+  });
+  // OpenCode tool permissions (bridge → owner). Rendered as allow/reject
+  // options in the owner's DM.
+  socket.on('helper:opencode:permission', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+    const permission = typeof p?.permission === 'string' ? p.permission.slice(0, 80) : '';
+    if (!convId || !recordId || !permission) return;
+    const payload = {
+      convId,
+      recordId,
+      permission,
+      patterns: Array.isArray(p?.patterns) ? p.patterns.slice(0, 4).map((x) => String(x).slice(0, 200)) : [],
+    };
+    pendingOpencodePermissions.set(recordId, payload);
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('agent:opencode:permission', payload);
+  });
+  socket.on('helper:opencode:permission:resolved', (p) => {
+    const convId = typeof p?.convId === 'string' && p.convId ? p.convId : getHelperDmConvId();
+    const recordId = typeof p?.recordId === 'string' ? p.recordId : '';
+    if (recordId) pendingOpencodePermissions.delete(recordId);
+    if (!convId) return;
+    const io = app.get('io');
+    io?.to(`dm:${convId}`).emit('agent:opencode:permission:resolved', { convId, recordId });
   });
   // Compact result from the bridge → the owner's DM (toast + size refresh).
   socket.on('helper:compact:result', (p) => {
@@ -2050,7 +2198,7 @@ function registerBridgeSocket(socket) {
  *  - 'timeout': the bridge did not answer within the configured timeout.
  *  - 'failed': empty reply or an unexpected routing error.
  *  - 'stopped': the user stopped the in-flight response. */
-async function routeViaOpenClawBridge(triggerMsgId, content, convId, agentOpts, active) {
+async function routeViaBridge(triggerMsgId, content, convId, agentOpts, active, mode) {
   const io = app.get('io');
   const bridgeRoom = io?.sockets?.adapter?.rooms?.get('bridge:openclaw');
   if (!bridgeRoom || bridgeRoom.size === 0) return { status: 'offline' };
@@ -2059,8 +2207,10 @@ async function routeViaOpenClawBridge(triggerMsgId, content, convId, agentOpts, 
   if (active) active.taskId = taskId;
   // Capture the routing target at task-creation time: if the owner switches
   // back to the DM while the task runs, the reply must still follow the
-  // session it was sent to (and must not be inserted into the DM).
-  const taskAgentSession = getAgentSession() || undefined;
+  // session it was sent to (and must not be inserted into the DM). OpenCode
+  // has no session routing — it always answers in the DM conversation.
+  const isOpencode = mode === 'opencode';
+  const taskAgentSession = isOpencode ? undefined : (getAgentSession() || undefined);
   const taskSessionRouted = !!taskAgentSession && taskAgentSession !== dmSessionKey(convId);
   let resolveTask;
   const taskPromise = new Promise((resolve) => { resolveTask = resolve; });
@@ -2097,9 +2247,12 @@ async function routeViaOpenClawBridge(triggerMsgId, content, convId, agentOpts, 
       triggerMsgId,
       content: String(content),
       ownerId: OPENCLAW_OWNER_ID,
+      mode: isOpencode ? 'opencode' : 'openclaw',
       model: agentOpts?.model || undefined,
       effort: agentOpts?.effort || undefined,
+      opencodeModel: isOpencode ? (agentOpts?.opencodeModel || undefined) : undefined,
       agentSession: taskAgentSession,
+      opencodeSession: isOpencode ? (getOpencodeSession() || undefined) : undefined,
       attachment: attachment || undefined,
     });
     const result = await taskPromise;
@@ -2494,7 +2647,7 @@ app.get('/api/jokes/random', requireAuth, (req, res) => {
 app.get('/api/agent-mode', requireAuth, (req, res) => {
   const user = getCurrentUser(req);
   if (user.id !== OPENCLAW_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
-  res.json({ mode: getAgentMode(), bridgeOnline: isBridgeOnline(), bridgeEnabled: OPENCLAW_BRIDGE_ENABLED });
+  res.json({ mode: getAgentMode(), bridgeOnline: isBridgeOnline(), opencodeOnline, bridgeEnabled: OPENCLAW_BRIDGE_ENABLED });
 });
 
 // Owner-only: switch the Venory agent routing mode. Persisted server-side so
@@ -2504,7 +2657,25 @@ app.post('/api/agent-mode', requireAuth, (req, res) => {
   if (user.id !== OPENCLAW_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
   const mode = typeof req.body?.mode === 'string' ? req.body.mode.trim() : '';
   if (!AGENT_MODES.has(mode)) return res.status(400).json({ error: 'Invalid mode', mode });
-  res.json({ mode: setAgentMode(mode), bridgeOnline: isBridgeOnline(), bridgeEnabled: OPENCLAW_BRIDGE_ENABLED });
+  res.json({ mode: setAgentMode(mode), bridgeOnline: isBridgeOnline(), opencodeOnline, bridgeEnabled: OPENCLAW_BRIDGE_ENABLED });
+});
+
+// Owner-only: dynamically listed models for both backends (via the bridge).
+// OpenClaw models come from the gateway config; OpenCode models from the
+// local opencode server's configured providers.
+app.get('/api/agent-models', requireAuth, async (req, res) => {
+  const user = getCurrentUser(req);
+  if (user.id !== OPENCLAW_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+  const bridgeOnline = isBridgeOnline();
+  let openclaw = [];
+  let opencode = [];
+  if (bridgeOnline) {
+    const oc = await bridgeRequest('helper:openclaw:models:get', {}, 8000);
+    if (oc?.ok && Array.isArray(oc.models)) openclaw = oc.models;
+    const ocde = await bridgeRequest('helper:opencode:models:get', {}, 8000);
+    if (ocde?.ok && Array.isArray(ocde.models)) opencode = ocde.models;
+  }
+  res.json({ openclaw, opencode });
 });
 
 // Owner-only: OpenClaw session picker. Lists the gateway sessions (via the
@@ -2555,6 +2726,45 @@ app.get('/api/agent-session-history', requireAuth, async (req, res) => {
   if (!result) return res.json({ ok: false, error: 'bridge offline' });
   if (!result.ok) return res.json({ ok: false, error: String(result.error || 'history fetch failed').slice(0, 200) });
   res.json({ ok: true, key: result.key || key, messages: Array.isArray(result.messages) ? result.messages : [] });
+});
+
+// Owner-only: list the OpenCode sessions (via the bridge → local opencode
+// server) and the currently selected one. Mirrors /api/agent-sessions for the
+// OpenClaw backend.
+app.get('/api/opencode-sessions', requireAuth, async (req, res) => {
+  const user = getCurrentUser(req);
+  if (user.id !== OPENCLAW_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+  const bridgeOnline = isBridgeOnline();
+  let sessions = [];
+  if (bridgeOnline) {
+    const result = await bridgeRequest('helper:opencode:sessions:get', {}, 10000);
+    if (result?.ok && Array.isArray(result.sessions)) sessions = result.sessions.slice(0, 40);
+  }
+  res.json({ sessions, current: getOpencodeSession(), bridgeOnline });
+});
+
+// Owner-only: switch which OpenCode session the owner's DM talks to.
+app.post('/api/opencode-session', requireAuth, (req, res) => {
+  const user = getCurrentUser(req);
+  if (user.id !== OPENCLAW_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+  const key = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+  const current = setOpencodeSession(key);
+  res.json({ current, bridgeOnline: isBridgeOnline() });
+});
+
+// Owner-only: chat history of a selected OpenCode session (via the bridge →
+// local opencode server). Mirrors /api/agent-session-history.
+app.get('/api/opencode-session-history', requireAuth, async (req, res) => {
+  const user = getCurrentUser(req);
+  if (user.id !== OPENCLAW_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+  const key = typeof req.query?.key === 'string' ? req.query.key.trim() : '';
+  if (!key || key.length > OPENCODE_SESSION_MAX || !/^ses_/.test(key)) {
+    return res.status(400).json({ error: 'Invalid session id' });
+  }
+  const result = await bridgeRequest('helper:opencode:sessions:history', { id: key }, 12000);
+  if (!result) return res.json({ ok: false, error: 'bridge offline' });
+  if (!result.ok) return res.json({ ok: false, error: String(result.error || 'history fetch failed').slice(0, 200) });
+  res.json({ ok: true, key: result.id || key, messages: Array.isArray(result.messages) ? result.messages : [] });
 });
 
 // Collections: saved messages per user
@@ -4335,6 +4545,11 @@ io.on('connection', (socket) => {
     }
     const list = [...pendingQuestions.values()].filter((q) => q.convId === ownerConv);
     if (list.length) socket.emit('helper:question:list', { convId: ownerConv, questions: list });
+    // Same for OpenCode questions/permissions (bridge pushes live updates).
+    const ocQuestions = [...pendingOpencodeQuestions.values()].filter((q) => q.convId === ownerConv);
+    for (const q of ocQuestions) socket.emit('agent:opencode:question', q);
+    const ocPermissions = [...pendingOpencodePermissions.values()].filter((q) => q.convId === ownerConv);
+    for (const q of ocPermissions) socket.emit('agent:opencode:permission', q);
   }
   socket.join(`user:${socket.userId}`);
   if (!isBlacklisted(socket.userId)) {
@@ -4398,6 +4613,46 @@ io.on('connection', (socket) => {
     if (!sessionKey) return;
     const io = app.get('io');
     io.to('bridge:openclaw').emit('helper:compact', { sessionKey });
+  });
+
+  // ── OpenCode question / permission replies (owner → bridge) ──
+  // The owner answers an OpenCode ask_user question by picking options in the
+  // DM; all of a record's questions resolve in one reply (in order).
+  socket.on('helper:opencode:answer', (payload) => {
+    if (socket.userId !== OPENCLAW_OWNER_ID) return;
+    const recordId = typeof payload?.recordId === 'string' ? payload.recordId : '';
+    const answers = Array.isArray(payload?.answers)
+      ? payload.answers.map((a) => (Array.isArray(a) ? a.filter((v) => typeof v === 'string' && v).slice(0, 4) : [])).filter((a) => a.length)
+      : [];
+    if (!recordId || !answers.length) return;
+    const io = app.get('io');
+    io.to('bridge:openclaw').emit('helper:opencode:answer', { recordId, answers });
+  });
+  socket.on('helper:opencode:reject', (payload) => {
+    if (socket.userId !== OPENCLAW_OWNER_ID) return;
+    const recordId = typeof payload?.recordId === 'string' ? payload.recordId : '';
+    if (!recordId) return;
+    const io = app.get('io');
+    io.to('bridge:openclaw').emit('helper:opencode:reject', { recordId });
+  });
+  socket.on('helper:opencode:permission:reply', (payload) => {
+    if (socket.userId !== OPENCLAW_OWNER_ID) return;
+    const recordId = typeof payload?.recordId === 'string' ? payload.recordId : '';
+    const reply = ['once', 'always', 'reject'].includes(payload?.reply) ? payload.reply : '';
+    if (!recordId || !reply) return;
+    const io = app.get('io');
+    io.to('bridge:openclaw').emit('helper:opencode:permission:reply', { recordId, reply });
+  });
+  // OpenCode compact: owner tapped Compact → bridge summarizes the selected
+  // OpenCode session (opencode's sessions.summarize). An empty id with a convId
+  // means the DM's own OpenCode session; the bridge resolves it.
+  socket.on('helper:opencode:compact', (payload) => {
+    if (socket.userId !== OPENCLAW_OWNER_ID) return;
+    const id = typeof payload?.id === 'string' ? payload.id.trim() : '';
+    const convId = typeof payload?.convId === 'string' ? payload.convId.trim() : '';
+    if (!id && !convId) return;
+    const io = app.get('io');
+    io.to('bridge:openclaw').emit('helper:opencode:compact', { id, convId });
   });
 
   // Stop the in-flight helper response for a room (all accounts). Resolves the

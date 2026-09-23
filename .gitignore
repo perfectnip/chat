@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 bridge/node_modules/
 bridge/bridge.env
+bridge/opencode-sessions.json
 data/
 device.json

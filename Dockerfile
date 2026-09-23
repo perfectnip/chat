@@ -19,7 +19,11 @@ RUN /app/.schoology-venv/bin/pip install --no-cache-dir -r /app/schoology-mcp/re
 FROM base AS runner
 ENV NODE_ENV=production
 ENV PORT=8080
-ENV APP_VERSION=2026-05-24.1
+# Stable per-deploy version for /api/version (auto-update) + asset cache-busting.
+# Must NOT be boot-time (that made every restart change the version and reload
+# all open chats). Override at deploy with --build-arg ASSET_VERSION=$(git rev-parse --short HEAD).
+ARG ASSET_VERSION=2026-09-22.1
+ENV ASSET_VERSION=${ASSET_VERSION}
 RUN groupadd --system --gid 1001 nodejs && useradd --system --uid 1001 --gid nodejs nodejs
 # Install python3 BEFORE copying venvs so symlinks resolve correctly
 # tesseract-ocr + ffmpeg are needed by AI Assistant file readers (OCR, audio analysis, video).
