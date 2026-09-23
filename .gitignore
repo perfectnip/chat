@@ -3,5 +3,6 @@ __pycache__/
 bridge/node_modules/
 bridge/bridge.env
 bridge/opencode-sessions.json
+bridge/codex-dm-sessions.json
 data/
 device.json

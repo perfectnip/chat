@@ -29,6 +29,7 @@ import { homedir } from 'node:os';
 import { timingSafeEqual, createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { startCodexBridge } from './codex-app-server.js';
 
 // --- env loading -----------------------------------------------------------
 // bridge.env (if present) provides fallbacks; already-set process env wins
@@ -183,6 +184,7 @@ const socket = io(JCHAT_URL, {
   reconnectionDelay: 1000,
   reconnectionDelayMax: 15000,
 });
+const codexBridge = startCodexBridge(socket, { downloadAttachment: downloadJchatAttachment });
 
 // --- gateway WebSocket (loopback, live agent events) ------------------------
 let gw = null;
@@ -1494,7 +1496,7 @@ async function handleTask(task) {
     return;
   }
   const { taskId, convId } = task;
-  const taskMode = task?.mode === 'opencode' ? 'opencode' : 'openclaw';
+  const taskMode = ['opencode', 'codex'].includes(task?.mode) ? task.mode : 'openclaw';
   log('task', taskId, 'conv', convId, taskMode);
 
   const controller = new AbortController();
@@ -1502,7 +1504,9 @@ async function handleTask(task) {
   taskModes.set(taskId, taskMode);
   taskConvs.set(taskId, convId);
 
-  const sessionKey = resolveTaskSessionKey(task);
+  const sessionKey = taskMode === 'codex'
+    ? `codex:${task.codexSession || task.convId}`
+    : (taskMode === 'opencode' ? `opencode:${task.opencodeSession || task.convId}` : resolveTaskSessionKey(task));
   if (typeof task?.agentSession === 'string') {
     // Server-authoritative session selection; apply immediately so live
     // agent events for this session map to this task, and so the relay
@@ -1531,10 +1535,10 @@ async function handleTask(task) {
       if (isDmLane) activeByConv.set(convId, taskId);
       activeBySession.set(sessionKey, taskId);
       taskSessionKeys.set(taskId, sessionKey);
-      return taskMode === 'opencode' ? runOpencodeAgent(task, controller) : runAgent(task, controller);
+      return taskMode === 'opencode' ? runOpencodeAgent(task, controller) : taskMode === 'codex' ? codexBridge.run(task, controller) : runAgent(task, controller);
     })
     .then((text) => {
-      recordReply(sessionKey, text);
+      if (taskMode !== 'codex') recordReply(sessionKey, text);
       socket.emit('helper:reply', { taskId, text });
     })
     .catch((err) => {
@@ -1871,6 +1875,7 @@ socket.on('helper:answer', async (p) => {
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     log('shutting down');
+    codexBridge.stop();
     try { gw?.close(); } catch (_) {}
     socket.close();
     process.exit(0);

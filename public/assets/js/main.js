@@ -125,8 +125,12 @@ let state = {
   agentBridgeOnline: true,
   agentBridgeEnabled: true,
   agentOpencodeOnline: true,
+  agentCodexOnline: true,
   agentOpenclawModels: [], // dynamic model list for OpenClaw (fetched from the gateway config)
   agentOpencodeModels: [], // dynamic model list for OpenCode (fetched from opencode providers)
+  agentCodexModels: [],
+  agentCodexModel: typeof localStorage !== 'undefined' ? (localStorage.getItem('agent_codex_model') || '') : '',
+  agentCodexEffort: typeof localStorage !== 'undefined' ? (localStorage.getItem('agent_codex_effort') || 'medium') : 'medium',
   agentOpencodeModel: typeof localStorage !== 'undefined' ? (localStorage.getItem('agent_opencode_model') || 'opencode-go/deepseek-v4-pro') : 'opencode-go/deepseek-v4-pro',
   helperRuns: {}, // roomKey -> { busy, working, done, tools: [{id,name,title,status,meta}] }
   sessionRuns: {}, // gateway sessionKey -> { busy, working, done, tools: [...] } (per-session live state)
@@ -152,6 +156,10 @@ let state = {
   opencodeSession: '', // selected OpenCode session id ('' = per-DM default)
   opencodeSessionView: null, // { key, label, messages, loading, error, loadedAt }
   opencodeCompacting: false,
+  codexSessions: [],
+  codexSession: '',
+  codexSessionView: null,
+  codexCompacting: false,
 };
 
 if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
@@ -2779,7 +2787,7 @@ function isFriendRequestPending(userId) {
  *  - Resolves with `{ message }` on success or `{ error }` on server rejection.
  *  - Rejects only on transport / network failures.
  */
-async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTimeoutMs = 12000, agent_model, agent_effort, agent_opencode_model }) {
+async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTimeoutMs = 12000, agent_model, agent_effort, agent_opencode_model, agent_codex_model }) {
   const socket = state.socket;
   const socketReady = socket && socket.connected;
   // AI moderation can take a couple of seconds, especially on cold starts or
@@ -2793,6 +2801,7 @@ async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTi
         if (agent_model) payload.agent_model = agent_model;
         if (agent_effort) payload.agent_effort = agent_effort;
         if (agent_opencode_model) payload.agent_opencode_model = agent_opencode_model;
+        if (agent_codex_model) payload.agent_codex_model = agent_codex_model;
         socket.emit('message:send', payload, (r) => {
           clearTimeout(timer);
           resolve(r);
@@ -2815,6 +2824,7 @@ async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTi
   if (agent_model) body.agent_model = agent_model;
   if (agent_effort) body.agent_effort = agent_effort;
   if (agent_opencode_model) body.agent_opencode_model = agent_opencode_model;
+  if (agent_codex_model) body.agent_codex_model = agent_codex_model;
   try {
     const data = await apiPost(httpPath, body);
     return data && data.message ? { message: data.message } : (data || {});
@@ -3217,6 +3227,12 @@ function connectSocket() {
       showToast(p?.error || 'Summary failed', 'error');
     }
   });
+  s.on('agent:codex:compact:result', (p = {}) => {
+    state.codexCompacting = false;
+    updateHelperUiInPlace();
+    showToast(p.error || p.message || (p.ok ? 'Codex context compacted' : 'Codex compaction failed'), p.ok ? 'success' : 'error');
+    loadCodexSessions();
+  });
   // OpenCode bridge status: the bridge reports whether the local OpenCode
   // server is reachable, so the OpenCode mode badge stays live.
   s.on('agent:opencode:status', ({ online } = {}) => {
@@ -3225,6 +3241,16 @@ function connectSocket() {
     if (next === state.agentOpencodeOnline) return; // no change → don't re-render
     state.agentOpencodeOnline = next;
     updateHelperUiInPlace();
+  });
+  s.on('agent:codex:status', ({ online } = {}) => {
+    if (!isOwner()) return;
+    const next = online !== false;
+    if (next === state.agentCodexOnline) return;
+    state.agentCodexOnline = next;
+    updateHelperUiInPlace();
+  });
+  s.on('agent:codex:session:updated', ({ key } = {}) => {
+    if (normalizeAgentMode(state.agentMode) === 'codex' && state.codexSession && state.codexSession === key) loadCodexSessionHistory(key);
   });
   // OpenCode ask_user questions (bridge → owner). Same tappable-options shape
   // as the OpenClaw panel but keyed separately so the two backends don't mix.
@@ -6117,6 +6143,17 @@ function helperRun() {
   // (group chats, other DMs, profile views) — even when a session view or
   // picker selection is still set in state.
   if (!isOwner() || !isHelperDm()) return null;
+  // Codex run events are keyed by the selected app-server thread id, not the
+  // JChat DM key or the OpenClaw session view key.
+  if (normalizeAgentMode(state.agentMode) === 'codex' && state.codexSession) {
+    const run = state.sessionRuns[state.codexSession];
+    return run ? {
+      busy: !!(run.busy || run.working),
+      working: !!run.working,
+      done: !!run.done,
+      tools: (run.tools || []).slice(),
+    } : null;
+  }
   // Session view: show the run state of the session being VIEWED, never the DM's.
   const viewKey = state.agentSessionView?.key;
   if (viewKey) {
@@ -6141,13 +6178,14 @@ function agentOptsForSend() {
   if (normalizeAgentMode(state.agentMode) === 'opencode') {
     return { agent_opencode_model: state.agentOpencodeModel };
   }
+  if (normalizeAgentMode(state.agentMode) === 'codex') return { agent_codex_model: state.agentCodexModel, agent_effort: state.agentCodexEffort };
   return { agent_model: state.agentModel, agent_effort: state.agentEffort };
 }
 
 // Load (or refresh) the owner's Venory routing mode from the server. Called
 // once on connect and again after a mode switch. Non-owner users never call it.
 function normalizeAgentMode(m) {
-  return (m === 'basic' || m === 'opencode') ? m : 'openclaw';
+  return (m === 'basic' || m === 'opencode' || m === 'codex') ? m : 'openclaw';
 }
 
 async function loadAgentMode() {
@@ -6158,6 +6196,7 @@ async function loadAgentMode() {
     state.agentBridgeOnline = !!data?.bridgeOnline;
     state.agentBridgeEnabled = !!data?.bridgeEnabled;
     state.agentOpencodeOnline = data?.opencodeOnline !== false;
+    state.agentCodexOnline = data?.codexOnline !== false;
   } catch (_) {
     // Keep current state on failure (e.g. bridge/session hiccup).
   }
@@ -6166,7 +6205,7 @@ async function loadAgentMode() {
 
 // Persist a mode switch to the server and refresh local state from the reply.
 async function setAgentMode(mode) {
-  if (mode !== 'openclaw' && mode !== 'opencode' && mode !== 'basic') return;
+  if (mode !== 'openclaw' && mode !== 'opencode' && mode !== 'codex' && mode !== 'basic') return;
   const prev = state.agentMode;
   state.agentMode = mode; // optimistic — reflect the click immediately
   // Switching backends must clear the other backend's session view so the
@@ -6180,6 +6219,7 @@ async function setAgentMode(mode) {
     state.agentBridgeOnline = !!data?.bridgeOnline;
     state.agentBridgeEnabled = !!data?.bridgeEnabled;
     state.agentOpencodeOnline = data?.opencodeOnline !== false;
+    state.agentCodexOnline = data?.codexOnline !== false;
   } catch (_) {
     state.agentMode = prev; // revert on failure
     render();
@@ -6187,6 +6227,7 @@ async function setAgentMode(mode) {
   updateHelperUiInPlace();
   // Refresh the active backend's session list so its picker + view are right.
   if (normalizeAgentMode(state.agentMode) === 'opencode') loadOpencodeSessions();
+  else if (normalizeAgentMode(state.agentMode) === 'codex') loadCodexSessions();
   else loadAgentSessions();
 }
 
@@ -6195,6 +6236,7 @@ async function setAgentMode(mode) {
 function clearAgentSessionViews() {
   if (state.agentSessionView) { state.agentSessionView = null; }
   if (state.opencodeSessionView) { state.opencodeSessionView = null; }
+  if (state.codexSessionView) { state.codexSessionView = null; }
 }
 
 // Auto-update: poll /api/version; when it changes a new deploy is live, so
@@ -6418,6 +6460,18 @@ async function loadOpencodeSessions() {
   syncOpencodeSessionView();
 }
 
+async function loadCodexSessions() {
+  if (!isOwner()) return;
+  try {
+    const data = await apiGet('/api/codex-sessions');
+    state.codexSessions = Array.isArray(data?.sessions) ? data.sessions : [];
+    state.codexSession = typeof data?.current === 'string' ? data.current : '';
+    state.agentCodexOnline = data?.codexOnline !== false;
+  } catch (_) {}
+  updateHelperUiInPlace();
+  syncCodexSessionView();
+}
+
 // Load the dynamically-listed models for both backends (OpenClaw config +
 // OpenCode providers) so the model dropdowns reflect what's actually available.
 async function loadAgentModels() {
@@ -6426,10 +6480,88 @@ async function loadAgentModels() {
     const data = await apiGet('/api/agent-models');
     if (Array.isArray(data?.openclaw) && data.openclaw.length) state.agentOpenclawModels = data.openclaw;
     if (Array.isArray(data?.opencode) && data.opencode.length) state.agentOpencodeModels = data.opencode;
+    if (Array.isArray(data?.codex)) {
+      state.agentCodexModels = data.codex;
+      if (!state.agentCodexModel || !data.codex.some((m) => m.id === state.agentCodexModel)) {
+        state.agentCodexModel = data.codex.find((m) => m.isDefault)?.id || data.codex[0]?.id || '';
+        if (state.agentCodexModel) try { localStorage.setItem('agent_codex_model', state.agentCodexModel); } catch (_) {}
+      }
+      const activeCodex = data.codex.find((m) => m.id === state.agentCodexModel);
+      if (activeCodex?.efforts?.length && !activeCodex.efforts.some((e) => e.id === state.agentCodexEffort)) {
+        state.agentCodexEffort = activeCodex.defaultEffort || activeCodex.efforts[0].id;
+        try { localStorage.setItem('agent_codex_effort', state.agentCodexEffort); } catch (_) {}
+      }
+    }
   } catch (_) {
     // keep current (hard-coded fallback) on failure
   }
   updateHelperUiInPlace();
+}
+
+async function setCodexSession(id) {
+  const key = typeof id === 'string' ? id : '';
+  const prev = state.codexSession;
+  state.codexSession = key;
+  updateHelperUiInPlace();
+  try {
+    const data = await apiPost('/api/codex-session', { sessionId: key });
+    state.codexSession = typeof data?.current === 'string' ? data.current : '';
+  } catch (_) { state.codexSession = prev; }
+  updateHelperUiInPlace();
+  syncCodexSessionView(true);
+}
+async function createCodexSession() {
+  try {
+    const data = await apiPost('/api/codex-session-create', { title: 'New jchat session' });
+    if (data?.session?.key) state.codexSessions = [data.session, ...(state.codexSessions || []).filter((s) => s.key !== data.session.key)];
+    state.codexSession = data?.current || data?.session?.key || '';
+    updateHelperUiInPlace();
+    syncCodexSessionView(true);
+  } catch (err) { showToast(err?.message || 'Could not create Codex session', 'error'); }
+}
+function codexSessionLabelForKey(key) {
+  const s = (state.codexSessions || []).find((x) => x.key === key);
+  if (s?.label) return s.label;
+  const base = String(key || '');
+  return base.length > 28 ? `${base.slice(0, 25)}…` : base;
+}
+function codexSessionSizeInfo() {
+  const s = (state.codexSessions || []).find((x) => x.key === state.codexSession);
+  const total = Number(s?.totalTokens || 0);
+  const ctx = Number(s?.contextTokens || 0);
+  const limit = Number(s?.contextTokenBudget || 0);
+  return { total, ctx, limit, label: state.codexSession ? codexSessionLabelForKey(state.codexSession) : 'This DM (jchat)' };
+}
+function syncCodexSessionView(force) {
+  if (normalizeAgentMode(state.agentMode) !== 'codex') { state.codexSessionView = null; return; }
+  const key = state.codexSession || '';
+  const viewing = state.codexSessionView?.key || '';
+  if (key && (force || key !== viewing || !state.codexSessionView?.loadedAt)) loadCodexSessionHistory(key);
+  else if (!key && viewing) { state.codexSessionView = null; render(); }
+}
+async function loadCodexSessionHistory(key) {
+  if (!key || !isOwner()) return;
+  const prev = state.codexSessionView;
+  state.codexSessionView = { key, label: codexSessionLabelForKey(key), messages: [], loading: true, error: '' };
+  render();
+  try {
+    const data = await apiGet(`/api/codex-session-history?key=${encodeURIComponent(key)}`);
+    if (!data?.ok) throw new Error(data?.error || 'Could not load conversation');
+    if (state.codexSession !== key) return;
+    state.codexSessionView = { key, label: codexSessionLabelForKey(key), messages: normalizeSessionHistory(data.messages || []), loading: false, error: '', loadedAt: Date.now() };
+  } catch (err) {
+    if (state.codexSession !== key) return;
+    state.codexSessionView = { ...prev, key, loading: false, error: err?.message || 'Could not load conversation' };
+  }
+  renderKeepingScroll();
+}
+function renderCodexSessionView() {
+  const view = state.codexSessionView;
+  const key = state.codexSession || '';
+  const items = view?.messages || [];
+  const emptyContent = view?.loading ? '<div class="messages-empty">Loading Codex conversation…</div>' : view?.error ? `<div class="messages-empty">Couldn't load this session: ${escapeHtml(view.error)}</div>` : items.length ? renderAgentSessionMessages(items) : '<div class="messages-empty">No messages yet in this conversation.</div>';
+  const draft = state.dmUserId ? getDraft('dm', state.dmUserId) : '';
+  return `<div class="chat-area"><div class="chat-main"><div class="chat-header"><div class="chat-header-title">${escapeHtml(view?.label || codexSessionLabelForKey(key))}</div><span class="chat-header-subtitle"><span class="presence-summary">Codex conversation · choose “This DM (jchat)” to return</span></span></div><div class="messages-wrap" data-codex-session-view="1" data-room-type="dm" data-room-id="${escapeHtml(state.convId || '')}">${emptyContent}</div>${renderHelperControlBar()}<div class="composer composer-safe-area" id="composer-drop-zone" data-can-send-files="true"><div class="composer-row"><div class="composer-input-wrap"><textarea id="composer-input" placeholder="Message…" rows="1">${escapeHtml(draft)}</textarea></div><div class="composer-actions"><button type="button" id="composer-mic" title="Record voice message"><span class="icon">${ICON_MIC}</span></button><button type="button" id="attach-file" title="Attach file"><span class="icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span></button><input type="file" id="file-input" class="hidden-input" accept="image/*,video/*,audio/*,*/*" /></div>${renderSendButton()}</div></div></div></div>`;
 }
 
 async function setOpencodeSession(id) {
@@ -6635,7 +6767,7 @@ function scheduleAgentHistoryRefresh() {
 /** Re-render without yanking the user's scroll position (used for live
  *  appends / background refreshes while the user is reading history). */
 function renderKeepingScroll() {
-  const wrap = document.querySelector('.messages-wrap[data-agent-session-view="1"], .messages-wrap[data-opencode-session-view="1"]');
+  const wrap = document.querySelector('.messages-wrap[data-agent-session-view="1"], .messages-wrap[data-opencode-session-view="1"], .messages-wrap[data-codex-session-view="1"]');
   if (!wrap) { render(); return; }
   const nearBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
   if (nearBottom) { render(); return; }
@@ -6643,7 +6775,7 @@ function renderKeepingScroll() {
   const prevTop = wrap.scrollTop;
   render();
   requestAnimationFrame(() => {
-    const w = document.querySelector('.messages-wrap[data-agent-session-view="1"], .messages-wrap[data-opencode-session-view="1"]');
+    const w = document.querySelector('.messages-wrap[data-agent-session-view="1"], .messages-wrap[data-opencode-session-view="1"], .messages-wrap[data-codex-session-view="1"]');
     if (w) w.scrollTop = prevTop + (w.scrollHeight - prevHeight);
   });
 }
@@ -6832,13 +6964,18 @@ function renderHelperControlBar() {
   const opencodeModelOptions = (state.agentOpencodeModels || []).map((m) =>
     `<option value="${m.id}" ${state.agentOpencodeModel === m.id ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
   ).join('');
+  const codexModels = state.agentCodexModels || [];
+  const currentCodex = codexModels.find((m) => m.id === state.agentCodexModel) || codexModels.find((m) => m.isDefault) || codexModels[0];
+  const codexModelOptions = codexModels.map((m) => `<option value="${escapeHtml(m.id)}" ${state.agentCodexModel === m.id ? 'selected' : ''}>${escapeHtml(m.label)}</option>`).join('');
+  const codexEfforts = currentCodex?.efforts?.length ? currentCodex.efforts : OPENCLAW_EFFORTS.filter((e) => ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(e.id));
+  const codexEffortOptions = codexEfforts.map((e) => `<option value="${escapeHtml(e.id)}" ${state.agentCodexEffort === e.id ? 'selected' : ''}>${escapeHtml(e.label)}</option>`).join('');
   const effortOptions = OPENCLAW_EFFORTS.map((e) =>
     `<option value="${e.id}" ${state.agentEffort === e.id ? 'selected' : ''}>${escapeHtml(e.label)}</option>`
   ).join('');
   const tools = run?.tools || [];
   const busy = !!run?.busy;
   const done = !!run?.done;
-  const statusLabel = busy ? (done ? 'Done' : 'Working…') : 'Idle';
+  const statusLabel = busy ? (done ? 'Done' : mode === 'codex' ? 'Working' : 'Working…') : 'Idle';
   const statusClass = busy ? (done ? 'hc-status-done' : 'hc-status-working') : 'hc-status-idle';
   const toolsHtml = tools.length
     ? tools.map((t) =>
@@ -6936,6 +7073,21 @@ function renderHelperControlBar() {
         ${state.opencodeSession ? `<span class="hc-note">Viewing <b>${escapeHtml(opencodeSessionLabelForKey(state.opencodeSession))}</b> — DMs here route to it; pick “This DM (jchat)” to return</span>` : ''}
       </div>` : '';
 
+  const cxSessionItems = [{ key: '', label: 'This DM (jchat)' }, ...(state.codexSessions || []).map((s) => ({ key: s.key, label: s.label || s.key }))];
+  const cxSessionItemsHtml = cxSessionItems.map((it) => {
+    const sel = state.codexSession === it.key;
+    return `<button type="button" role="option" class="hc-session-opt" data-codex-key="${escapeHtml(it.key)}" aria-selected="${sel ? 'true' : 'false'}"><span class="hc-session-dot" aria-hidden="true"></span><span class="hc-session-opt-label">${escapeHtml(it.label)}</span></button>`;
+  }).join('');
+  const cxSessionCurrent = state.codexSession ? codexSessionLabelForKey(state.codexSession) : 'This DM (jchat)';
+  const codexRow = mode === 'codex' ? `
+      <div class="hc-row hc-row-detail">
+        <label class="hc-label">Model<select id="agent-codex-model-select" class="hc-select">${codexModelOptions || '<option value="">Codex models unavailable</option>'}</select></label>
+        <label class="hc-label">Effort<select id="agent-codex-effort-select" class="hc-select">${codexEffortOptions}</select></label>
+        <span class="hc-status ${statusClass}" id="helper-status-badge"><span class="hc-status-dot" aria-hidden="true"></span>${escapeHtml(statusLabel)}</span>
+      </div>
+      <div class="hc-row"><span class="hc-label">Chat</span><span class="hc-session-picker"><button type="button" class="hc-session-trigger" id="codex-session-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Codex conversation" title="${escapeHtml(cxSessionCurrent)}"><span class="hc-session-trigger-label">${escapeHtml(cxSessionCurrent)}</span><span class="icon icon-sm hc-session-caret" aria-hidden="true">${ICON_CHEVRON_DOWN}</span></button><span class="hc-session-menu" role="listbox" hidden>${cxSessionItemsHtml}<button type="button" class="hc-session-new" data-new-codex-session="1">＋ New conversation</button></span></span>${state.codexSession ? `<span class="hc-note">Viewing <b>${escapeHtml(cxSessionCurrent)}</b> — choose “This DM (jchat)” to return</span>` : ''}</div>
+      <div class="hc-tools" id="helper-tools-list">${toolsHtml}</div>` : '';
+
   let bridgeBadge = '';
   if (mode === 'openclaw') {
     bridgeBadge = state.agentBridgeEnabled
@@ -6943,17 +7095,19 @@ function renderHelperControlBar() {
       : '';
   } else if (mode === 'opencode') {
     bridgeBadge = `<span class="hc-bridge ${opencodeOnline ? '' : 'hc-bridge-off'}" id="helper-bridge-badge">${opencodeOnline ? 'opencode online' : 'opencode offline'}</span>`;
+  } else if (mode === 'codex') {
+    bridgeBadge = `<span class="hc-bridge ${state.agentCodexOnline ? '' : 'hc-bridge-off'}" id="helper-bridge-badge">${state.agentCodexOnline ? 'Codex online' : 'Codex offline'}</span>`;
   }
   // Content size + Compact for the currently viewed session (updates when
   // switching via the picker — updateHelperUiInPlace re-renders this bar).
-  const size = mode === 'opencode' ? opencodeSessionSizeInfo() : sessionSizeInfo();
+  const size = mode === 'opencode' ? opencodeSessionSizeInfo() : mode === 'codex' ? codexSessionSizeInfo() : sessionSizeInfo();
   const sizeText = size.total ? (size.limit
     ? `${fmtTokens(size.total)}/${fmtTokens(size.limit)} (${Math.round((size.total / size.limit) * 100)}%)`
     : fmtTokens(size.total) + ' tok') : '';
   const sizeTitle = `${size.label} — content size ${size.total ? size.total.toLocaleString('en-US') + ' tokens' : 'unknown'}${size.limit ? ` of ${size.limit.toLocaleString('en-US')} budget` : ''}${size.ctx ? ` · context window ${size.ctx.toLocaleString('en-US')}` : ''}`;
   const sizeBadge = `<span class="hc-size-badge" id="helper-size-badge" title="${escapeHtml(sizeTitle)}">${sizeText || '—'}</span>`;
-  const compactBusy = mode === 'opencode' ? state.opencodeCompacting : state.helperCompacting;
-  const showCompact = mode === 'openclaw' || mode === 'opencode';
+  const compactBusy = mode === 'opencode' ? state.opencodeCompacting : mode === 'codex' ? state.codexCompacting : state.helperCompacting;
+  const showCompact = mode === 'openclaw' || mode === 'opencode' || mode === 'codex';
   const compactBtn = showCompact
     ? `<button type="button" class="hc-compact-btn${compactBusy ? ' is-busy' : ''}" id="helper-compact-btn" title="Compact the session context">${compactBusy ? 'Compacting…' : 'Compact'}</button>`
     : '';
@@ -6965,12 +7119,13 @@ function renderHelperControlBar() {
         <div class="hc-mode-toggle" id="agent-mode-toggle" role="radiogroup" aria-label="Venory mode">
           <button type="button" class="hc-mode-opt ${mode === 'openclaw' ? 'is-active' : ''}" data-mode="openclaw">OpenClaw</button>
           <button type="button" class="hc-mode-opt ${mode === 'opencode' ? 'is-active' : ''}" data-mode="opencode">OpenCode</button>
+          <button type="button" class="hc-mode-opt ${mode === 'codex' ? 'is-active' : ''}" data-mode="codex">Codex</button>
           <button type="button" class="hc-mode-opt ${mode === 'basic' ? 'is-active' : ''}" data-mode="basic">basic</button>
         </div>
         ${bridgeBadge}
         ${sizeBadge}
         ${compactBtn}
-      </div>${openclawRow}${opencodeRow}
+      </div>${openclawRow}${opencodeRow}${codexRow}
     </div>
   `;
 }
@@ -7029,6 +7184,15 @@ if (typeof document !== 'undefined') {
     } else if (t && t.id === 'agent-opencode-model-select') {
       state.agentOpencodeModel = t.value;
       try { localStorage.setItem('agent_opencode_model', t.value); } catch (_) {}
+    } else if (t && t.id === 'agent-codex-model-select') {
+      state.agentCodexModel = t.value;
+      const model = (state.agentCodexModels || []).find((m) => m.id === t.value);
+      if (model?.efforts?.length && !model.efforts.some((e) => e.id === state.agentCodexEffort)) state.agentCodexEffort = model.defaultEffort || model.efforts[0].id;
+      try { localStorage.setItem('agent_codex_model', t.value); } catch (_) {}
+      updateHelperUiInPlace();
+    } else if (t && t.id === 'agent-codex-effort-select') {
+      state.agentCodexEffort = t.value;
+      try { localStorage.setItem('agent_codex_effort', t.value); } catch (_) {}
     }
   });
   // OpenCode custom (free-text) question answers: capture typing so the Send
@@ -7116,14 +7280,18 @@ if (typeof document !== 'undefined') {
     // .hc-session-opt (which uses data-key) so the two backends don't collide.
     const ocOpt = target && target.closest ? target.closest('.hc-session-opt[data-oc-key]') : null;
     const newOc = target && target.closest ? target.closest('[data-new-opencode-session]') : null;
+    const cxOpt = target && target.closest ? target.closest('.hc-session-opt[data-codex-key]') : null;
+    const newCx = target && target.closest ? target.closest('[data-new-codex-session]') : null;
     const newAgent = target && target.closest ? target.closest('[data-new-agent-session]') : null;
     if (newOc) { createOpencodeSession(); closeSessionMenus(); return; }
+    if (newCx) { createCodexSession(); closeSessionMenus(); return; }
     if (newAgent) { createAgentSession(); closeSessionMenus(); return; }
     if (ocOpt && picker) {
       setOpencodeSession(ocOpt.dataset.ocKey || '');
       closeSessionMenus();
       return;
     }
+    if (cxOpt && picker) { setCodexSession(cxOpt.dataset.codexKey || ''); closeSessionMenus(); return; }
     if (opt && picker) {
       setAgentSession(opt.dataset.key || '');
       closeSessionMenus();
@@ -7163,6 +7331,11 @@ if (typeof document !== 'undefined') {
       // No explicit session selected means the DM's own OpenCode session; the
       // bridge resolves that from the DM conversation id.
       state.socket?.emit('helper:opencode:compact', { id: key, convId: key ? '' : (state.convId || '') });
+    } else if (mode === 'codex') {
+      if (state.codexCompacting) return;
+      state.codexCompacting = true;
+      updateHelperUiInPlace();
+      state.socket?.emit('helper:codex:compact', { id: state.codexSession || '', convId: state.convId || '' });
     } else if (mode === 'openclaw') {
       if (state.helperCompacting) return;
       const key = currentAgentSessionKey();
@@ -7482,6 +7655,7 @@ function renderChatArea() {
   if (roomType === 'dm' && isHelperDm() && isOwner() && normalizeAgentMode(state.agentMode) === 'opencode' && state.opencodeSession && state.opencodeSessionView?.key === state.opencodeSession) {
     return renderOpencodeSessionView();
   }
+  if (roomType === 'dm' && isHelperDm() && isOwner() && normalizeAgentMode(state.agentMode) === 'codex' && state.codexSession && state.codexSessionView?.key === state.codexSession) return renderCodexSessionView();
 
   // If the DM target is a private user, the server already 403'd when we
   // tried to open the conversation. Replace the message list + composer

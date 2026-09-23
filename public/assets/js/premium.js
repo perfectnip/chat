@@ -41,6 +41,10 @@ function tierLabel(tier) {
   return tier === 'plus' ? 'Premium Plus' : tier === 'premium' ? 'Premium' : 'Free';
 }
 
+function crownSvg() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="m2.5 7 4.2 3.2L12 4l5.3 6.2L21.5 7l-2.1 12H4.6L2.5 7Z"/><path d="M4.6 16.2h14.8"/></svg>';
+}
+
 async function apiJson(path, init = {}) {
   const res = await fetch(path, {
     credentials: 'same-origin',
@@ -184,7 +188,7 @@ export async function openPremiumModal({ reason = 'manual' } = {}) {
 
   body.innerHTML = `
     <div class="premium-head">
-      <span class="premium-crown" aria-hidden="true">\u2728</span>
+      <span class="premium-crown">${crownSvg()}</span>
       <h2 id="premium-modal-title">${deps.tx('premiumTitle', 'Upgrade to Premium')}</h2>
       <p class="premium-sub">${deps.escapeHtml(reasonLine(reason)) || deps.tx('premiumSub', 'More Venory, bigger memory, file uploads.')}</p>
     </div>
@@ -221,7 +225,7 @@ export async function openPremiumModal({ reason = 'manual' } = {}) {
         ? deps.tx('premiumPickPlan', 'Pick a plan')
         : ok
           ? `${deps.tx('premiumSubscribe', 'Subscribe')} \u00b7 ${priceOf(t, selectedPlan)}`
-          : deps.tx('premiumComingSoon', 'Coming soon');
+          : deps.tx('premiumUnavailable', 'Not available');
     }
   };
   syncCards();
@@ -243,14 +247,26 @@ export async function openPremiumModal({ reason = 'manual' } = {}) {
 async function startCheckout(tier, plan) {
   const { tx } = deps;
   const sub = document.getElementById('premium-subscribe');
+  const restoreButton = () => {
+    if (!sub) return;
+    sub.disabled = false;
+    sub.textContent = tx('premiumSubscribe', 'Subscribe');
+  };
   if (sub) { sub.disabled = true; sub.textContent = tx('premiumStarting', 'Starting\u2026'); }
-  const res = await apiJson('/api/premium/checkout', {
-    method: 'POST',
-    body: JSON.stringify({ tier, plan }),
-  });
+  let res;
+  try {
+    res = await apiJson('/api/premium/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ tier, plan }),
+    });
+  } catch (_) {
+    deps.showToast(tx('premiumCheckoutFailed', 'Could not start checkout'));
+    restoreButton();
+    return;
+  }
   if (!res.ok || !res.body?.clientSecret) {
     deps.showToast(res.body?.message || tx('premiumCheckoutFailed', 'Could not start checkout'));
-    if (sub) { sub.disabled = false; sub.textContent = tx('premiumSubscribe', 'Subscribe'); }
+    restoreButton();
     return;
   }
   try {
@@ -265,6 +281,7 @@ async function startCheckout(tier, plan) {
     mount.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   } catch (err) {
     deps.showToast(tx('premiumStripeFailed', 'Could not open the payment form. Please try again.'));
+    restoreButton();
   }
 }
 
@@ -382,14 +399,14 @@ export function premiumBannerHtml({ compact = false } = {}) {
   const { tx, escapeHtml } = deps;
   if (tier !== 'free') {
     return `<div class="premium-banner active">
-      <span class="premium-banner-icon">\u2728</span>
+      <span class="premium-banner-icon">${crownSvg()}</span>
       <div class="premium-banner-text"><strong>${escapeHtml(tierLabel(tier))}</strong>
       <span>${tx('premiumThanks', 'Thanks for supporting Venory!')}</span></div>
       <button type="button" class="premium-btn ghost small" data-premium-open="banner">${tx('premiumManage', 'Manage subscription')}</button>
     </div>`;
   }
   return `<div class="premium-banner ${compact ? 'compact' : ''}">
-    <span class="premium-banner-icon">\u2728</span>
+    <span class="premium-banner-icon">${crownSvg()}</span>
     <div class="premium-banner-text">
       <strong>${tx('premiumBannerTitle', 'Get more out of Venory')}</strong>
       <span>${tx('premiumBannerBody', '100 messages/day, file uploads and 100k memory with Premium.')}</span>
@@ -402,7 +419,7 @@ export function premiumBannerHtml({ compact = false } = {}) {
 export function premiumMenuItemHtml() {
   const tier = tierOf();
   return `<button type="button" class="menu-item premium-menu-item" data-premium-open="menu">
-    <span class="icon" aria-hidden="true">\u2728</span>
+    <span class="icon" aria-hidden="true">${crownSvg()}</span>
     <span>${deps.tx(tier === 'free' ? 'premiumUpgrade' : 'premiumManage', tier === 'free' ? 'Upgrade' : 'Manage subscription')}</span>
   </button>`;
 }

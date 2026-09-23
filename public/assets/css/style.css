@@ -8334,7 +8334,13 @@ input[type="checkbox"]:checked::after {
 .premium-loading { text-align: center; padding: 40px; color: rgba(255, 255, 255, 0.6); }
 
 .premium-head { text-align: center; margin-bottom: 14px; }
-.premium-crown { font-size: 28px; }
+.premium-crown {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #f6c85f;
+}
+.premium-crown svg { width: 30px; height: 30px; }
 .premium-head h2 {
   margin: 6px 0 4px;
   font-size: 21px;
@@ -8474,7 +8480,15 @@ input[type="checkbox"]:checked::after {
 }
 .premium-banner.compact { padding: 10px 12px; }
 .premium-banner.active { background: rgba(134, 239, 172, 0.1); border-color: rgba(134, 239, 172, 0.35); }
-.premium-banner-icon { font-size: 20px; }
+.premium-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: #f6c85f;
+}
+.premium-banner-icon svg { width: 22px; height: 22px; }
+.premium-banner.active .premium-banner-icon { color: #86efac; }
 .premium-banner-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .premium-banner-text strong { font-size: 14px; }
 .premium-banner-text span { font-size: 12px; opacity: 0.7; }
