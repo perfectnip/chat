@@ -8583,3 +8583,114 @@ input[type="checkbox"]:checked::after {
   cursor: pointer;
   font-family: inherit;
 }
+
+/* Narrow portrait chat: reclaim the panel rail and give the conversation the
+   full device width. Keep its toggle reachable as a small edge handle. */
+@media (max-width: 600px), (max-aspect-ratio: 1/1) and (max-width: 900px) {
+  html,
+  body,
+  #app,
+  .app-shell,
+  .app-shell-inner {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .app-shell {
+    height: 100dvh;
+  }
+
+  .app-shell-inner { overflow: hidden; }
+
+  .panel-column {
+    width: 0;
+    min-width: 0;
+    overflow: visible;
+    z-index: 250;
+  }
+
+  .panel-column-toggle {
+    position: fixed;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 52px;
+    border: 1px solid var(--border);
+    border-left: 0;
+    border-radius: 0 10px 10px 0;
+    background: var(--bg-panel);
+    box-shadow: 2px 2px 12px rgba(0, 0, 0, .22);
+    z-index: 350;
+  }
+
+  .panel-column-toggle .left-bar-icon { width: 13px; height: 13px; }
+
+  .panel-column-expanded {
+    width: 240px;
+    min-width: 0;
+  }
+
+  .panel-column-expanded .panel-column-toggle {
+    position: absolute;
+    left: auto;
+    top: 50%;
+    right: -18px;
+    transform: translateY(-50%);
+    height: 52px;
+    border-left: 1px solid var(--border);
+    border-radius: 0 10px 10px 0;
+  }
+
+  .chat-main,
+  .chat-area { min-width: 0; width: 100%; }
+
+  .chat-header {
+    min-height: 46px;
+    padding: 0.35rem 0.65rem;
+  }
+
+  .chat-header-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-header-subtitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+  .messages-wrap { padding: 0.6rem 0.45rem; }
+
+  .message-row,
+  .message-row:has(.message.own) {
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 0.35rem;
+  }
+
+  .message-row:has(.message.own) { grid-template-columns: minmax(0, 1fr) 30px; }
+
+  .message-avatar { width: 28px; height: 28px; }
+
+  .composer {
+    padding: 0.4rem 0.45rem calc(0.4rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .composer textarea { max-height: 112px; padding: 0.45rem 0.65rem; }
+
+  .left-bar {
+    flex: 0 0 calc(54px + env(safe-area-inset-bottom, 0px));
+    height: calc(54px + env(safe-area-inset-bottom, 0px));
+    min-height: calc(54px + env(safe-area-inset-bottom, 0px));
+    background: color-mix(in srgb, var(--bg-panel) 94%, var(--purple));
+    box-shadow: 0 -5px 18px rgba(0, 0, 0, .18);
+  }
+
+  .left-bar .left-bar-nav { justify-content: space-evenly; gap: 0; }
+
+  .left-bar .left-bar-item {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 12px;
+  }
+}
