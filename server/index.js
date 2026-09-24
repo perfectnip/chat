@@ -1822,7 +1822,7 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
 
     if (!reply || !reply.trim()) return;
 
-    insertHelperReply(triggerMsgId, reply.trim(), roomType, roomId);
+    insertHelperReply(triggerMsgId, reply.trim(), roomType, roomId, { typewriter: true });
   } catch (err) {
     if (err?.name === 'AbortError' || controller.signal.aborted) {
       console.log('[helper-bot] response stopped by user');
@@ -1839,7 +1839,7 @@ async function helperReply(triggerMsgId, content, roomType, roomId, userId, agen
 
 /** Insert a helper-authored message and emit it to the room (shared by the
  *  DeepSeek helper and the OpenClaw bridge paths). */
-function insertHelperReply(triggerMsgId, text, roomType, roomId) {
+function insertHelperReply(triggerMsgId, text, roomType, roomId, { typewriter = false } = {}) {
   const id = randomUUID();
   const now = Date.now();
   // reply_to_id has an FK to messages.id. Session-routed sends don't persist
@@ -1860,7 +1860,7 @@ function insertHelperReply(triggerMsgId, text, roomType, roomId) {
     SELECT m.*, u.username, u.display_name, u.avatar_url, u.chatbox_style
     FROM messages m LEFT JOIN users u ON u.id = m.sender_id WHERE m.id = ?
   `).get(id);
-  const msg = { ...row, likes: 0, edit_history: null };
+  const msg = { ...row, likes: 0, edit_history: null, ...(typewriter ? { typewriter: true } : {}) };
   const io = app.get('io');
   const emitRoom = roomType === 'dm' ? `dm:${roomId}` : `group:${GROUP_ID}`;
   io?.to(emitRoom).emit('message', msg);

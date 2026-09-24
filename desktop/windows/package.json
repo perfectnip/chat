@@ -1,0 +1,33 @@
+{
+  "name": "jimmyqrg-chat-windows",
+  "version": "1.7.0",
+  "description": "JimmyQrg Chat desktop app for Windows",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.jimmyqrg.chat",
+    "productName": "JimmyQrg Chat",
+    "directories": { "output": "dist" },
+    "files": ["main.cjs", "icon.ico", "package.json"],
+    "win": {
+      "icon": "icon.ico",
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "artifactName": "JimmyQrg-Chat-Windows-Setup.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "JimmyQrg Chat"
+    }
+  }
+}

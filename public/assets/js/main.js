@@ -2839,6 +2839,26 @@ async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTi
   }
 }
 
+function addTypewriterMessage(msg) {
+  const fullText = msg.content;
+  const displayMsg = { ...msg, content: '' };
+  addMessageLocal(displayMsg);
+  const key = roomKey(msg.room_type, msg.room_id);
+  const chars = Array.from(fullText);
+  let index = 0;
+  const step = () => {
+    const list = state.messages[key];
+    const current = list?.find((item) => item.id === msg.id);
+    if (!current) return;
+    index = Math.min(index + 1, chars.length);
+    current.content += chars[index - 1];
+    const bubble = document.querySelector(`.message-content[data-typewriter-id="${CSS.escape(msg.id)}"]`);
+    if (bubble) bubble.innerHTML = renderMessageContent(current.content);
+    if (index < chars.length) setTimeout(step, 22);
+  };
+  if (chars.length) setTimeout(step, 22);
+}
+
 export function addMessageLocal(msg) {
   if (isBlocked(msg.sender_id)) return;
   const key = roomKey(msg.room_type, msg.room_id);
@@ -2983,7 +3003,11 @@ function connectSocket() {
       }
       return;
     }
-    addMessageLocal(msg);
+    if (msg.sender_id === HELPER_BOT_ID && msg.typewriter && typeof msg.content === 'string') {
+      addTypewriterMessage(msg);
+    } else {
+      addMessageLocal(msg);
+    }
     const trigger = msg.room_type === 'dm' ? 'dm' : 'group';
     if (shouldShowNotification(trigger, msg.sender_id, msg.room_type, msg.room_id)) {
       const from = msg.display_name || msg.username || 'Someone';
@@ -6250,6 +6274,7 @@ function clearAgentSessionViews() {
 function initAutoUpdate() {
   const CHECK_MS = 60000;
   const RELOAD_DELAY_MS = 4000;
+  const RELOAD_TARGET_KEY = 'jchat:auto-update-target';
   let updating = false;
   const check = async () => {
     if (updating || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return;
@@ -6261,9 +6286,22 @@ function initAutoUpdate() {
       if (!v) return;
       if (!state.appVersion) { state.appVersion = v; return; } // first read = baseline
       if (v === state.appVersion) return;
+      // A stale webview/cache can keep serving an old bundle after a reload.
+      // Never reload repeatedly for the same target version in this tab.
+      try {
+        if (sessionStorage.getItem(RELOAD_TARGET_KEY) === v) {
+          state.appVersion = v;
+          return;
+        }
+        sessionStorage.setItem(RELOAD_TARGET_KEY, v);
+      } catch (_) {}
       updating = true;
       showToast(tx('appUpdated', 'New version available — reloading…'), 'info');
-      setTimeout(() => location.reload(), RELOAD_DELAY_MS);
+      setTimeout(() => {
+        const next = new URL(location.href);
+        next.searchParams.set('__jchat_update', v);
+        location.replace(next.toString());
+      }, RELOAD_DELAY_MS);
     } catch (_) { /* transient network hiccup: keep current baseline */ }
   };
   check();
@@ -8102,7 +8140,7 @@ function renderMessage(m, roomType, roomId, context = {}) {
           <button type="button" class="message-edit-cancel" data-msg-id="${m.id}"><span class="icon" aria-hidden="true">${ICON_X_SM}</span>Cancel</button>
         </div>
       </div>`
-    : `<div class="message-content message-content-file">${content}</div>`;
+    : `<div class="message-content message-content-file"${m.typewriter ? ` data-typewriter-id="${escapeHtml(m.id)}"` : ''}>${content}</div>`;
 
   const defaultAvatar = getDefaultAvatarUrl(m.sender_id);
   const avatarSrc = (m.avatar_url && String(m.avatar_url).trim()) ? m.avatar_url : defaultAvatar;

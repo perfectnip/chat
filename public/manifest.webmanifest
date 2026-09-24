@@ -1,0 +1,31 @@
+{
+  "id": "/",
+  "name": "JimmyQrg Chat",
+  "short_name": "JQ Chat",
+  "description": "Real-time group chat and direct messages.",
+  "start_url": "/chat/group/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ],
+  "orientation": "any",
+  "theme_color": "#0b0d12",
+  "background_color": "#0b0d12",
+  "icons": [
+    {
+      "src": "/assets/icons/favicon-128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/icons/favicon-256.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
