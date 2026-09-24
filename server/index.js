@@ -552,6 +552,7 @@ const MODEL_ID_RE = /^[a-zA-Z0-9._\-\/]{1,100}$/;
 // to (a) broadcast "Venory is responding" so every account can show the stop
 // button, and (b) abort a DeepSeek/bridge helper response on stop.
 const helperActiveByRoom = new Map(); // roomKey -> { kind, taskId, controller }
+const helperReplyQueues = new Map(); // roomKey -> promise chain for serial Venory turns
 
 /** Normalize owner-supplied model/effort into a sanitized object (or undefined). */
 function sanitizeAgentOpts(payload) {
@@ -1710,7 +1711,27 @@ function helperQuotaUsername(userId) {
   }
 }
 
-async function helperReply(triggerMsgId, content, roomType, roomId, userId, agentOpts) {
+function helperReply(triggerMsgId, content, roomType, roomId, userId, agentOpts) {
+  const mode = getAgentMode();
+  const shouldQueue = roomType === 'dm' && userId === OPENCLAW_OWNER_ID
+    && ['openclaw', 'opencode', 'codex'].includes(mode);
+  if (!shouldQueue) return runHelperReply(triggerMsgId, content, roomType, roomId, userId, agentOpts);
+
+  // These backends accept follow-up messages while generating, but the
+  // underlying session APIs are not safe to turn/start concurrently. Accept
+  // immediately at the chat layer, then process turns in message order.
+  const queueKey = presenceRoomKeyForRoom(roomType, roomId);
+  const previous = helperReplyQueues.get(queueKey) || Promise.resolve();
+  const queued = previous.catch(() => {}).then(() => runHelperReply(triggerMsgId, content, roomType, roomId, userId, agentOpts));
+  helperReplyQueues.set(queueKey, queued);
+  queued.catch((err) => console.error('[helper-bot] queued turn failed:', err?.message || err));
+  queued.finally(() => {
+    if (helperReplyQueues.get(queueKey) === queued) helperReplyQueues.delete(queueKey);
+  }).catch(() => {});
+  return queued;
+}
+
+async function runHelperReply(triggerMsgId, content, roomType, roomId, userId, agentOpts) {
   const io = app.get('io');
   const roomKey = presenceRoomKeyForRoom(roomType, roomId);
   // Only guard runs that target THIS DM's own gateway session. Session-routed
@@ -1981,6 +2002,22 @@ function registerBridgeSocket(socket) {
   socket.on('helper:codex:status', (p) => {
     codexOnline = !!p?.online;
     app.get('io')?.to(`user:${OPENCLAW_OWNER_ID}`).emit('agent:codex:status', { online: codexOnline });
+  });
+  socket.on('helper:codex:turn:status', (p) => {
+    const convId = typeof p?.convId === 'string' ? p.convId : '';
+    const threadId = typeof p?.threadId === 'string' ? p.threadId : '';
+    if (!convId || !threadId || !['working', 'done'].includes(p?.status)) return;
+    app.get('io')?.to(`dm:${convId}`).emit('agent:codex:turn:status', { convId, threadId, status: p.status });
+  });
+  socket.on('helper:codex:tool', (p) => {
+    const convId = typeof p?.convId === 'string' ? p.convId : '';
+    if (!convId || typeof p?.threadId !== 'string' || typeof p?.id !== 'string') return;
+    app.get('io')?.to(`dm:${convId}`).emit('helper:status', {
+      roomType: 'dm', roomId: convId,
+      id: p.id, kind: 'tool', status: p.status === 'running' ? 'running' : p.status,
+      name: typeof p.name === 'string' ? p.name : 'tool',
+      title: typeof p.title === 'string' ? p.title : '',
+    });
   });
   // Dynamic model listing results (OpenClaw + OpenCode).
   socket.on('helper:openclaw:models:result', (p) => {
@@ -4884,6 +4921,15 @@ io.on('connection', (socket) => {
     const conv = db.prepare('SELECT id, user1_id, user2_id FROM conversations WHERE id = ?').get(convId);
     if (!conv || (conv.user1_id !== socket.userId && conv.user2_id !== socket.userId)) return ack?.({ error: 'Forbidden' });
     socket.join(`dm:${convId}`);
+    if (socket.userId === OPENCLAW_OWNER_ID && convId === getHelperDmConvId()) {
+      const active = helperActiveByRoom.get(presenceRoomKeyForRoom('dm', convId));
+      socket.emit('helper:busy', {
+        status: active ? 'start' : 'end',
+        roomType: 'dm',
+        roomId: convId,
+        sessionKey: active?.sessionKey || '',
+      });
+    }
     ack?.({ ok: true });
   });
 

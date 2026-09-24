@@ -41,7 +41,7 @@ function tierLabel(tier) {
   return tier === 'plus' ? 'Premium Plus' : tier === 'premium' ? 'Premium' : 'Free';
 }
 
-function crownSvg() {
+export function crownSvg() {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="m2.5 7 4.2 3.2L12 4l5.3 6.2L21.5 7l-2.1 12H4.6L2.5 7Z"/><path d="M4.6 16.2h14.8"/></svg>';
 }
 

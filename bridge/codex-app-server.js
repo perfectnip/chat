@@ -1,14 +1,19 @@
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { URL } from 'node:url';
 
 const BIN = process.env.CODEX_BIN || '/Applications/ChatGPT.app/Contents/Resources/codex';
 const CWD = process.env.CODEX_JCHAT_CWD || homedir();
 const FETCH_TIMEOUT = Number(process.env.CODEX_APP_SERVER_TIMEOUT_MS || 36 * 60 * 60 * 1000);
 const MODEL_ID_RE = /^[a-zA-Z0-9._-]{1,100}$/;
-const VALID_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
-const DM_SESSIONS_PATH = new URL('./codex-dm-sessions.json', import.meta.url).pathname;
+const VALID_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+// Keep bridge-owned conversations separate from any session ids that may have
+// been selected in the desktop Codex app. Older versions reused
+// codex-dm-sessions.json, which could contain a desktop-owned thread and make
+// the desktop report “This is open in another app”.
+const DM_SESSIONS_PATH = new URL('./codex-bridge-sessions.json', import.meta.url).pathname;
 const dmSessions = new Map();
 try {
   const raw = JSON.parse(readFileSync(DM_SESSIONS_PATH, 'utf8'));
@@ -78,7 +83,7 @@ function handleServerRequest(msg) {
       options: (Array.isArray(q?.options) ? q.options : []).map((o) => ({ label: String(o?.label || ''), description: String(o?.description || '') })).filter((o) => o.label),
     })).filter((q) => q.questionId && q.question);
     if (!questions.length) return serverReply(id, { answers: {} });
-    pendingRequests.set(recordId, { id, type: 'question', questions });
+    pendingRequests.set(recordId, { id, type: 'question', questions, convId });
     socket?.emit('helper:codex:question', { convId, recordId, questions });
     return;
   }
@@ -86,7 +91,7 @@ function handleServerRequest(msg) {
     const command = Array.isArray(p.command) ? p.command.join(' ') : String(p.command || '');
     const permission = msg.method.includes('fileChange') ? 'Apply file changes' : (p.networkApprovalContext ? `Network access to ${p.networkApprovalContext.host || 'requested destination'}` : 'Run command');
     const patterns = [command, p.cwd && `Directory: ${p.cwd}`, p.reason].filter(Boolean);
-    pendingRequests.set(recordId, { id, type: 'permission', method: msg.method });
+    pendingRequests.set(recordId, { id, type: 'permission', method: msg.method, convId });
     socket?.emit('helper:codex:permission', { convId, recordId, permission, patterns });
     return;
   }
@@ -99,12 +104,30 @@ function handleServerRequest(msg) {
       ...(Array.isArray(fs.write) ? fs.write.map((x) => `Write: ${x}`) : []),
       ...(net.enabled ? ['Network access requested'] : []),
     ];
-    pendingRequests.set(recordId, { id, type: 'permissions', permissions: requested });
+    pendingRequests.set(recordId, { id, type: 'permissions', permissions: requested, convId });
     socket?.emit('helper:codex:permission', { convId, recordId, permission: String(p.reason || 'Additional access requested'), patterns });
+    return;
+  }
+  if (msg.method === 'mcpServer/elicitation/request') {
+    // This client does not yet render arbitrary MCP forms or URL hand-offs.
+    // Explicitly decline instead of leaving the Codex turn waiting forever.
+    serverReply(id, { action: 'decline', content: null });
     return;
   }
   log('declining unsupported Codex request:', msg.method);
   serverReply(id, null, { code: -32601, message: 'This Codex request is not supported in jchat.' });
+  if (p.threadId) {
+    // A future interactive request type may have no matching chat UI. Fail
+    // this turn visibly and release the chat's busy state instead of waiting
+    // indefinitely for a response that can never arrive.
+    const turn = activeTurns.get(p.threadId);
+    if (turn) {
+      activeTurns.delete(p.threadId);
+      clearTimeout(turn.timer);
+      turn.reject(new Error(`Unsupported Codex request: ${msg.method}`));
+    }
+    rpc('turn/interrupt', { threadId: p.threadId }, 10000).catch(() => {});
+  }
 }
 function handleLine(line) {
   let msg;
@@ -121,13 +144,30 @@ function handleLine(line) {
   if (msg.method === 'item/agentMessage/delta') {
     const turn = activeTurns.get(p.threadId);
     if (turn && typeof p.delta === 'string') turn.text += p.delta;
-  } else if (msg.method === 'item/completed') {
+  } else if (msg.method === 'item/started' || msg.method === 'item/completed') {
     const turn = activeTurns.get(p.threadId);
-    if (turn && p.item?.type === 'agentMessage' && typeof p.item.text === 'string') turn.lastMessage = p.item.text;
+    const item = p.item || {};
+    if (msg.method === 'item/completed' && turn && item.type === 'agentMessage' && typeof item.text === 'string') turn.lastMessage = item.text;
+    if (turn && item.type && item.type !== 'agentMessage' && item.type !== 'userMessage' && item.type !== 'reasoning') {
+      const id = String(item.id || '');
+      const type = String(item.type);
+      const name = type === 'commandExecution' ? 'command' : type === 'webSearch' ? 'search' : type === 'fileChange' ? 'file' : type;
+      const rawTitle = item.command || item.toolName || item.name || item.title || item.filePath || item.query || '';
+      const title = String(rawTitle).slice(0, 500);
+      socket?.emit('helper:codex:tool', {
+        convId: convByThread.get(p.threadId) || lastConvId,
+        threadId: p.threadId,
+        id,
+        name,
+        title,
+        status: msg.method === 'item/started' ? 'running' : (item.status === 'failed' ? 'failed' : 'completed'),
+      });
+    }
   } else if (msg.method === 'turn/completed') {
     const turn = activeTurns.get(p.turn?.threadId || p.threadId);
+    const threadId = p.turn?.threadId || p.threadId;
+    if (threadId) socket?.emit('helper:codex:turn:status', { convId: convByThread.get(threadId) || lastConvId, threadId, status: 'done' });
     if (turn) {
-      const threadId = p.turn?.threadId || p.threadId;
       activeTurns.delete(threadId); clearTimeout(turn.timer);
       if (p.turn?.status === 'failed') turn.reject(new Error(p.turn?.error?.message || 'Codex turn failed'));
       else turn.resolve(String(turn.lastMessage || turn.text || '').trim());
@@ -137,8 +177,12 @@ function handleLine(line) {
     const req = pendingRequests.get(recordId);
     if (req) {
       pendingRequests.delete(recordId);
-      socket?.emit(`helper:codex:${req.type}:resolved`, { convId: convByThread.get(p.threadId) || lastConvId, recordId });
+      const category = req.type === 'question' ? 'question' : 'permission';
+      socket?.emit(`helper:codex:${category}:resolved`, { convId: req.convId || convByThread.get(p.threadId) || lastConvId, recordId });
     }
+  } else if (msg.method === 'turn/started') {
+    const threadId = p.turn?.threadId || p.threadId;
+    if (threadId) socket?.emit('helper:codex:turn:status', { convId: convByThread.get(threadId) || lastConvId, threadId, status: 'working' });
   }
 }
 function connect() {
@@ -172,13 +216,15 @@ function normalizeModels(data) {
     defaultEffort: String(m.defaultReasoningEffort || ''), isDefault: !!m.isDefault,
   }));
 }
-function normalizeSessions(data) {
+export function normalizeSessions(data, sessionCwd = CWD) {
+  const expectedCwd = resolve(sessionCwd);
   return (Array.isArray(data?.data) ? data.data : []).map((t) => ({
     key: String(t.id || ''), label: String(t.name || t.preview || t.id || 'Codex conversation'),
     updatedAt: Number(t.updatedAt || t.updated_at || 0) * (Number(t.updatedAt || t.updated_at || 0) < 1e12 ? 1000 : 1),
     model: String(t.model || ''), totalTokens: Number(t.tokenUsage?.totalTokens || 0),
     contextTokens: Number(t.tokenUsage?.lastTotalTokens || 0), contextTokenBudget: Number(t.modelContextWindow || 0),
-  })).filter((s) => s.key);
+    cwd: typeof t.cwd === 'string' ? resolve(t.cwd) : '',
+  })).filter((s) => s.key && s.cwd === expectedCwd).map(({ cwd, ...session }) => session);
 }
 async function ensureThread(convId, selected, model) {
   const key = selected || dmSessions.get(convId);
@@ -288,11 +334,11 @@ export function startCodexBridge(io, { downloadAttachment } = {}) {
     });
     pendingRequests.delete(String(recordId));
     serverReply(req.id, { answers: mapped });
-    io.emit('helper:codex:question:resolved', { convId: lastConvId, recordId: String(recordId) });
+    io.emit('helper:codex:question:resolved', { convId: req.convId || lastConvId, recordId: String(recordId) });
   });
   io.on('helper:codex:permission:reply', ({ recordId, reply } = {}) => {
     const req = pendingRequests.get(String(recordId));
-    if (!req || req.type !== 'permission') return;
+    if (!req || !['permission', 'permissions'].includes(req.type)) return;
     pendingRequests.delete(String(recordId));
     if (req.type === 'permissions') {
       const granted = ['accept', 'acceptForSession'].includes(reply) ? req.permissions : {};
@@ -300,7 +346,7 @@ export function startCodexBridge(io, { downloadAttachment } = {}) {
     } else {
       serverReply(req.id, { decision: ['accept', 'acceptForSession', 'decline', 'cancel'].includes(reply) ? reply : 'decline' });
     }
-    io.emit('helper:codex:permission:resolved', { convId: lastConvId, recordId: String(recordId) });
+    io.emit('helper:codex:permission:resolved', { convId: req.convId || lastConvId, recordId: String(recordId) });
   });
   io.on('helper:stop', ({ taskId } = {}) => { if (taskId) activeTurns.forEach((turn, key) => { if (turn.taskId === taskId) rpc('turn/interrupt', { threadId: key }, 10000).catch(() => {}); }); });
   return {

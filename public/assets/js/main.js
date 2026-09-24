@@ -3,7 +3,7 @@ import { apiGet, apiPost, apiPatch, apiPut, apiDelete, uploadFile, getDefaultAva
 import { compressMedia, isCompressibleMedia, formatBytes } from './mediaCompression.js';
 import {
   initPremiumClient, quotaBarHtml, maybeBlockVenoryUpload, handleUpgradeRequired,
-  settingsPremiumHtml, premiumBannerHtml,
+  settingsPremiumHtml, premiumBannerHtml, crownSvg as premiumCrownSvg,
 } from './premium.js';
 
 if (typeof window !== 'undefined' && window.katex) {
@@ -3276,6 +3276,26 @@ function connectSocket() {
     state.agentCodexOnline = next;
     updateHelperUiInPlace();
   });
+  s.on('agent:codex:turn:status', ({ convId, threadId, status } = {}) => {
+    if (!isOwner() || !convId || !threadId) return;
+    const isSelectedThread = state.codexSession === threadId;
+    const isDmThread = !state.codexSession && state.convId === convId;
+    if (!isSelectedThread && !isDmThread) return;
+    const runMap = isSelectedThread ? state.sessionRuns : state.helperRuns;
+    const key = isSelectedThread ? threadId : roomKey('dm', convId);
+    const run = runMap[key] || { busy: false, working: false, done: false, tools: [] };
+    if (status === 'working') {
+      run.busy = true;
+      run.working = true;
+      run.done = false;
+    } else {
+      run.busy = false;
+      run.working = false;
+      run.done = true;
+    }
+    runMap[key] = run;
+    updateHelperUiInPlace(roomKey('dm', convId));
+  });
   s.on('agent:codex:session:updated', ({ key } = {}) => {
     if (normalizeAgentMode(state.agentMode) === 'codex' && state.codexSession && state.codexSession === key) loadCodexSessionHistory(key);
   });
@@ -5704,7 +5724,7 @@ function renderMain() {
             <span class="left-bar-label">${t('settings')}</span>
           </a>
           <button type="button" class="left-bar-item premium-left-bar ${isPremiumUser() ? 'is-premium' : ''}" data-premium-open="nav" title="${tx('premiumTitle', 'Upgrade to Premium')}">
-            <span class="left-bar-icon-wrap"><span class="left-bar-icon" aria-hidden="true">\u2728</span>${isPremiumUser() ? '' : `<span class="left-bar-badge premium-badge-dot"></span>`}</span>
+            <span class="left-bar-icon-wrap"><span class="left-bar-icon" aria-hidden="true">${premiumCrownSvg()}</span>${isPremiumUser() ? '' : `<span class="left-bar-badge premium-badge-dot"></span>`}</span>
             <span class="left-bar-label">${tx('premiumNavLabel', 'Premium')}</span>
           </button>
           ${isNativeApp() ? '' : `
@@ -6203,6 +6223,17 @@ function helperRun() {
 function isHelperBusy() {
   return !!(helperRun()?.busy);
 }
+function canQueueVenoryFollowup() {
+  return isOwner() && isHelperDm() && ['openclaw', 'opencode', 'codex'].includes(normalizeAgentMode(state.agentMode));
+}
+function composerHasContent() {
+  const roomType = state.dmUserId ? 'dm' : 'group';
+  const roomId = state.dmUserId || state.panel;
+  return !!(getDraft(roomType, roomId).trim() || state._pendingFile);
+}
+function shouldShowHelperStop() {
+  return isHelperBusy() && !(canQueueVenoryFollowup() && composerHasContent());
+}
 function agentOptsForSend() {
   if (!(isOwner() && isHelperDm())) return {};
   if (normalizeAgentMode(state.agentMode) === 'opencode') {
@@ -6218,8 +6249,9 @@ function normalizeAgentMode(m) {
   return (m === 'basic' || m === 'opencode' || m === 'codex') ? m : 'openclaw';
 }
 
-async function loadAgentMode() {
+async function loadAgentMode({ refreshView = false } = {}) {
   if (!isOwner()) return;
+  const previous = state.agentMode;
   try {
     const data = await apiGet('/api/agent-mode');
     state.agentMode = normalizeAgentMode(data?.mode);
@@ -6230,7 +6262,15 @@ async function loadAgentMode() {
   } catch (_) {
     // Keep current state on failure (e.g. bridge/session hiccup).
   }
+  const changed = state.agentMode !== previous;
+  if (changed) clearAgentSessionViews();
+  if (refreshView || changed) render();
   updateHelperUiInPlace();
+  if (refreshView || changed) {
+    if (state.agentMode === 'opencode') loadOpencodeSessions();
+    else if (state.agentMode === 'codex') loadCodexSessions();
+    else loadAgentSessions();
+  }
 }
 
 // Persist a mode switch to the server and refresh local state from the reply.
@@ -7028,8 +7068,9 @@ function renderHelperControlBar() {
   const codexModels = state.agentCodexModels || [];
   const currentCodex = codexModels.find((m) => m.id === state.agentCodexModel) || codexModels.find((m) => m.isDefault) || codexModels[0];
   const codexModelOptions = codexModels.map((m) => `<option value="${escapeHtml(m.id)}" ${state.agentCodexModel === m.id ? 'selected' : ''}>${escapeHtml(m.label)}</option>`).join('');
-  const codexEfforts = currentCodex?.efforts?.length ? currentCodex.efforts : OPENCLAW_EFFORTS.filter((e) => ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(e.id));
-  const codexEffortOptions = codexEfforts.map((e) => `<option value="${escapeHtml(e.id)}" ${state.agentCodexEffort === e.id ? 'selected' : ''}>${escapeHtml(e.label)}</option>`).join('');
+  const codexEffortLabels = { none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+  const codexEfforts = currentCodex?.efforts?.length ? currentCodex.efforts : OPENCLAW_EFFORTS.filter((e) => ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(e.id));
+  const codexEffortOptions = codexEfforts.map((e) => `<option value="${escapeHtml(e.id)}" ${state.agentCodexEffort === e.id ? 'selected' : ''}>${escapeHtml(codexEffortLabels[e.id] || e.label || e.id)}</option>`).join('');
   const effortOptions = OPENCLAW_EFFORTS.map((e) =>
     `<option value="${e.id}" ${state.agentEffort === e.id ? 'selected' : ''}>${escapeHtml(e.label)}</option>`
   ).join('');
@@ -7099,14 +7140,14 @@ function renderHelperControlBar() {
   // OpenCode backend: session picker (mirrors OpenClaw's) + a live status
   // line. No model/effort — the backend runs on the owner's machine.
   const ocSessionItems = [
-    { key: '', label: 'This DM (jchat)' },
-    ...(state.opencodeSessions || []).map((s) => ({ key: s.key, label: s.label || s.key })),
+    { key: '', label: 'This DM (jchat)', active: !!helperRun()?.busy },
+    ...(state.opencodeSessions || []).map((s) => ({ key: s.key, label: s.label || s.key, active: !!s.hasActiveRun || !!state.sessionRuns[s.key]?.busy })),
   ];
   const ocSessionItemsHtml = ocSessionItems.map((it) => {
     const sel = state.opencodeSession === it.key;
     return `
         <button type="button" role="option" class="hc-session-opt${sel ? ' is-selected' : ''}" data-oc-key="${escapeHtml(it.key)}" aria-selected="${sel ? 'true' : 'false'}">
-          <span class="hc-session-dot" aria-hidden="true"></span>
+          <span class="hc-session-dot" aria-hidden="true">${it.active ? ICON_ACTIVE_DOT : ''}</span>
           <span class="hc-session-opt-label">${escapeHtml(it.label)}</span>
         </button>`;
   }).join('');
@@ -7134,10 +7175,10 @@ function renderHelperControlBar() {
         ${state.opencodeSession ? `<span class="hc-note">Viewing <b>${escapeHtml(opencodeSessionLabelForKey(state.opencodeSession))}</b> — DMs here route to it; pick “This DM (jchat)” to return</span>` : ''}
       </div>` : '';
 
-  const cxSessionItems = [{ key: '', label: 'This DM (jchat)' }, ...(state.codexSessions || []).map((s) => ({ key: s.key, label: s.label || s.key }))];
+  const cxSessionItems = [{ key: '', label: 'This DM (jchat)', active: !!helperRun()?.busy }, ...(state.codexSessions || []).map((s) => ({ key: s.key, label: s.label || s.key, active: !!s.hasActiveRun || !!state.sessionRuns[s.key]?.busy }))];
   const cxSessionItemsHtml = cxSessionItems.map((it) => {
     const sel = state.codexSession === it.key;
-    return `<button type="button" role="option" class="hc-session-opt" data-codex-key="${escapeHtml(it.key)}" aria-selected="${sel ? 'true' : 'false'}"><span class="hc-session-dot" aria-hidden="true"></span><span class="hc-session-opt-label">${escapeHtml(it.label)}</span></button>`;
+    return `<button type="button" role="option" class="hc-session-opt" data-codex-key="${escapeHtml(it.key)}" aria-selected="${sel ? 'true' : 'false'}"><span class="hc-session-dot" aria-hidden="true">${it.active ? ICON_ACTIVE_DOT : ''}</span><span class="hc-session-opt-label">${escapeHtml(it.label)}</span></button>`;
   }).join('');
   const cxSessionCurrent = state.codexSession ? codexSessionLabelForKey(state.codexSession) : 'This DM (jchat)';
   const codexRow = mode === 'codex' ? `
@@ -7192,8 +7233,7 @@ function renderHelperControlBar() {
 }
 
 function renderSendButton() {
-  const busy = isHelperBusy();
-  if (busy) {
+  if (shouldShowHelperStop()) {
     return `<button type="button" class="composer-send composer-stop" id="send-btn" title="Stop" aria-label="Stop"><span class="icon" aria-hidden="true">${ICON_STOP}</span></button>`;
   }
   const disabled = (state._spamBlockedUntil && Date.now() < state._spamBlockedUntil) ? 'disabled' : '';
@@ -7213,7 +7253,7 @@ function updateHelperUiInPlace(key) {
   }
   const btn = document.getElementById('send-btn');
   if (btn) {
-    const busy = isHelperBusy();
+    const busy = shouldShowHelperStop();
     const isStop = btn.classList.contains('composer-stop');
     if (isStop !== busy) {
       btn.classList.toggle('composer-stop', busy);
@@ -10818,9 +10858,7 @@ function bindMain() {
   if (sendBtn && input) {
     const send = async () => {
       if (state._sendingMessage) return;
-      // Venory is responding: the send button is a stop button right now, so
-      // block normal sends until the current response is stopped.
-      if (isHelperBusy()) return;
+      if (isHelperBusy() && !canQueueVenoryFollowup()) return;
       const text = input.value.trim();
       if (!text && !state._pendingFile) return;
       const roomType = state.dmUserId ? 'dm' : 'group';
@@ -10857,6 +10895,7 @@ function bindMain() {
             clearDraft(roomType, draftRoomId);
             input.value = '';
             resizeComposerInput();
+            updateHelperUiInPlace();
             setState({ replyTo: null });
           })
           .catch((err) => {
@@ -11050,6 +11089,7 @@ function bindMain() {
           clearDraft(roomType, draftRoomId);
           input.value = '';
           resizeComposerInput();
+          updateHelperUiInPlace();
           setState({ replyTo: null });
           if (roomType === 'dm') loadMessages('dm', roomId).then(render);
           done();
@@ -11093,6 +11133,7 @@ function bindMain() {
           clearDraft(roomType, draftRoomId);
           input.value = '';
           resizeComposerInput();
+          updateHelperUiInPlace();
           setState({ replyTo: null });
         })
         .catch((err) => {
@@ -11104,7 +11145,7 @@ function bindMain() {
       const roomType = state.dmUserId ? 'dm' : 'group';
       const roomId = state.dmUserId ? state.convId : state.panel;
       // Stop instead of send while Venory is responding.
-      if (isHelperBusy()) {
+      if (shouldShowHelperStop()) {
         // Always name the session whose run is visible so the bridge can
         // abort the actual gateway run, not just the in-flight HTTP request.
         const viewKey = state.agentSessionView?.key;
@@ -11130,8 +11171,7 @@ function bindMain() {
         // button); enable "Enter key sends" in Settings to send with Enter.
         if (isMobile() && !state.enterToSend) return;
         e.preventDefault();
-        // Block Enter-send while Venory is responding (must stop first).
-        if (isHelperBusy()) return;
+        if (isHelperBusy() && !canQueueVenoryFollowup()) return;
         const roomType = state.dmUserId ? 'dm' : 'group';
         const roomId = state.dmUserId ? state.convId : state.panel;
         emitTypingStop(roomType, roomId);
@@ -11144,6 +11184,7 @@ function bindMain() {
       const roomId = state.dmUserId ? state.convId : state.panel;
       const draftRoomId = state.dmUserId || state.panel;
       saveDraft(roomType, draftRoomId, input.value);
+      updateHelperUiInPlace();
       emitTypingActivity(roomType, roomId);
       maybeOpenMentionAutocomplete(input);
     });
@@ -13113,9 +13154,13 @@ function applyRoute(route) {
             state.convId = conversation_id;
             state.convByUserId[route.dmUserId] = conversation_id;
             state.convIdToUserId[conversation_id] = route.dmUserId;
-            return loadMessages('dm', conversation_id).then(() => {
-          state.socket?.emit('dm:join', conversation_id, () => {});
-          render();
+            return loadMessages('dm', conversation_id).then(async () => {
+              state.socket?.emit('dm:join', conversation_id, () => {});
+              if (route.dmUserId === HELPER_BOT_ID && isOwner()) {
+                await loadAgentMode({ refreshView: true });
+                loadAgentModels();
+              }
+              render();
             });
           }).catch((err) => {
             if (isPrivateUserError(err)) {
