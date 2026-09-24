@@ -2854,9 +2854,9 @@ function addTypewriterMessage(msg) {
     current.content += chars[index - 1];
     const bubble = document.querySelector(`.message-content[data-typewriter-id="${CSS.escape(msg.id)}"]`);
     if (bubble) bubble.innerHTML = renderMessageContent(current.content);
-    if (index < chars.length) setTimeout(step, 22);
+    if (index < chars.length) setTimeout(step, 7);
   };
-  if (chars.length) setTimeout(step, 22);
+  if (chars.length) setTimeout(step, 7);
 }
 
 export function addMessageLocal(msg) {
