@@ -29,6 +29,14 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools platforms;android-36 build-tools;36.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Prepare Capacitor Android project
+        run: |
+          npm ci --ignore-scripts
+          npx cap sync android
       - name: Build APK
         shell: bash
         run: |
