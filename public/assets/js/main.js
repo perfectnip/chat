@@ -5555,6 +5555,7 @@ function renderMain() {
       <div class="panel-column ${panelExpanded ? 'panel-column-expanded' : ''}" id="panel-column">
         <button type="button" class="panel-column-toggle" id="panel-column-toggle" title="${panelExpanded ? 'Close panels' : 'Open panels'}" aria-label="${panelExpanded ? 'Close panels' : 'Open panels'}">
           <span class="left-bar-icon" aria-hidden="true">${panelExpanded ? ICON_CHEVRON_LEFT : ICON_CHEVRON_RIGHT}</span>
+          <span class="mobile-menu-glyph" aria-hidden="true"><i></i><i></i><i></i></span>
         </button>
         <div class="panel-column-overlay" id="panel-column-overlay" aria-hidden="true"></div>
         <div class="panel-column-content">

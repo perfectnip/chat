@@ -838,6 +838,8 @@ select:focus {
   display: none;
 }
 
+.mobile-menu-glyph { display: none; }
+
 .panel-column-overlay {
   display: none;
 }
@@ -8584,8 +8586,8 @@ input[type="checkbox"]:checked::after {
   font-family: inherit;
 }
 
-/* Narrow portrait chat: reclaim the panel rail and give the conversation the
-   full device width. Keep its toggle reachable as a small edge handle. */
+/* Phone chat: full-width conversation, floating panel menu, and larger touch
+   controls designed for thumbs instead of pointer precision. */
 @media (max-width: 600px), (max-aspect-ratio: 1/1) and (max-width: 900px) {
   html,
   body,
@@ -8612,20 +8614,41 @@ input[type="checkbox"]:checked::after {
 
   .panel-column-toggle {
     position: fixed;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 18px;
-    height: 52px;
+    left: max(12px, env(safe-area-inset-left, 0px));
+    top: max(12px, env(safe-area-inset-top, 0px));
+    transform: none;
+    width: 48px;
+    height: 48px;
     border: 1px solid var(--border);
-    border-left: 0;
-    border-radius: 0 10px 10px 0;
-    background: var(--bg-panel);
-    box-shadow: 2px 2px 12px rgba(0, 0, 0, .22);
-    z-index: 350;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--bg-panel) 88%, var(--purple));
+    color: var(--text);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .32);
+    backdrop-filter: blur(14px);
+    z-index: 500;
   }
 
-  .panel-column-toggle .left-bar-icon { width: 13px; height: 13px; }
+  .panel-column-toggle .left-bar-icon { display: none; }
+
+  .mobile-menu-glyph {
+    display: flex;
+    width: 21px;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .mobile-menu-glyph i {
+    display: block;
+    width: 21px;
+    height: 2px;
+    border-radius: 2px;
+    background: currentColor;
+    transition: transform .18s ease, width .18s ease;
+  }
+
+  .panel-column-expanded .mobile-menu-glyph i:first-child { transform: translateY(7px) rotate(45deg); }
+  .panel-column-expanded .mobile-menu-glyph i:nth-child(2) { width: 0; }
+  .panel-column-expanded .mobile-menu-glyph i:last-child { transform: translateY(-7px) rotate(-45deg); }
 
   .panel-column-expanded {
     width: 240px;
@@ -8633,22 +8656,22 @@ input[type="checkbox"]:checked::after {
   }
 
   .panel-column-expanded .panel-column-toggle {
-    position: absolute;
-    left: auto;
-    top: 50%;
-    right: -18px;
-    transform: translateY(-50%);
-    height: 52px;
-    border-left: 1px solid var(--border);
-    border-radius: 0 10px 10px 0;
+    position: fixed;
+    left: max(12px, env(safe-area-inset-left, 0px));
+    top: max(12px, env(safe-area-inset-top, 0px));
+    right: auto;
+    transform: none;
+    width: 48px;
+    height: 48px;
+    border-radius: 16px;
   }
 
   .chat-main,
   .chat-area { min-width: 0; width: 100%; }
 
   .chat-header {
-    min-height: 46px;
-    padding: 0.35rem 0.65rem;
+    min-height: 64px;
+    padding: 0.45rem 0.65rem 0.45rem 70px;
   }
 
   .chat-header-title {
@@ -8658,6 +8681,17 @@ input[type="checkbox"]:checked::after {
   }
 
   .chat-header-subtitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+  .chat-header-menu-btn,
+  .composer-actions button,
+  .composer-send {
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    min-height: 48px;
+    border-radius: 14px;
+    touch-action: manipulation;
+  }
 
   .messages-wrap { padding: 0.6rem 0.45rem; }
 
@@ -8677,10 +8711,16 @@ input[type="checkbox"]:checked::after {
 
   .composer textarea { max-height: 112px; padding: 0.45rem 0.65rem; }
 
+  .composer-row { gap: 0.45rem; }
+  .composer-actions { gap: 0.25rem; padding: 0.2rem; }
+  .composer-input-wrap { min-height: 48px; border-radius: 16px; }
+
   .left-bar {
-    flex: 0 0 calc(54px + env(safe-area-inset-bottom, 0px));
-    height: calc(54px + env(safe-area-inset-bottom, 0px));
-    min-height: calc(54px + env(safe-area-inset-bottom, 0px));
+    flex: 0 0 calc(68px + env(safe-area-inset-bottom, 0px));
+    height: calc(68px + env(safe-area-inset-bottom, 0px));
+    min-height: calc(68px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(0.4rem, env(safe-area-inset-left, 0px));
+    padding-right: max(0.4rem, env(safe-area-inset-right, 0px));
     background: color-mix(in srgb, var(--bg-panel) 94%, var(--purple));
     box-shadow: 0 -5px 18px rgba(0, 0, 0, .18);
   }
@@ -8688,9 +8728,21 @@ input[type="checkbox"]:checked::after {
   .left-bar .left-bar-nav { justify-content: space-evenly; gap: 0; }
 
   .left-bar .left-bar-item {
-    width: 44px;
-    min-width: 44px;
-    min-height: 44px;
-    border-radius: 12px;
+    width: 48px;
+    min-width: 48px;
+    min-height: 48px;
+    border-radius: 15px;
+    padding: 0.55rem;
+    touch-action: manipulation;
+  }
+
+  .left-bar .left-bar-avatar-link { width: 40px; height: 40px; }
+  .left-bar .left-bar-avatar { padding: 0.35rem; }
+
+  .panel-list-link,
+  .panel-user-item,
+  .panel-column-expanded button,
+  .panel-column-expanded [role="button"] {
+    min-height: 48px;
   }
 }
