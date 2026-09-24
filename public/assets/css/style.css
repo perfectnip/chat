@@ -8786,8 +8786,21 @@ input[type="checkbox"]:checked::after {
     align-items: center;
   }
 
-  .composer-input-wrap { grid-column: 1 / -1; grid-row: 1; width: 100%; }
-  .composer textarea { font-size: 16px; line-height: 1.35; }
+  .composer-input-wrap {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    width: 100%;
+    min-height: 40px;
+    align-items: center;
+  }
+  .composer textarea {
+    height: 22px;
+    min-height: 22px;
+    padding-top: 0;
+    padding-bottom: 0;
+    font-size: 16px;
+    line-height: 22px;
+  }
   .composer-actions { display: contents; }
   .composer-actions #composer-mic { grid-column: 1; grid-row: 2; }
   .composer-actions #attach-file { grid-column: 2; grid-row: 2; }

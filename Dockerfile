@@ -22,7 +22,7 @@ ENV PORT=8080
 # Stable per-deploy version for /api/version (auto-update) + asset cache-busting.
 # Must NOT be boot-time (that made every restart change the version and reload
 # all open chats). Override at deploy with --build-arg ASSET_VERSION=$(git rev-parse --short HEAD).
-ARG ASSET_VERSION=2026-09-22.1
+ARG ASSET_VERSION=2026-09-24.1
 ENV ASSET_VERSION=${ASSET_VERSION}
 RUN groupadd --system --gid 1001 nodejs && useradd --system --uid 1001 --gid nodejs nodejs
 # Install python3 BEFORE copying venvs so symlinks resolve correctly
