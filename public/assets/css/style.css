@@ -1079,6 +1079,22 @@ select:focus {
   justify-content: flex-start;
 }
 
+/* Keep horizontal navigation contents inset while the rail expands/collapses;
+   explicit full-width rows avoid drifting toward the outer border. */
+@media (min-aspect-ratio: 1/1) {
+  .left-bar-nav { width: 100%; align-items: center; }
+  .left-bar:not(.left-bar-expanded) .left-bar-item { flex: 0 0 40px; margin-inline: auto; }
+  .left-bar-expanded .left-bar-nav { align-items: stretch; padding: 0.5rem 0.65rem; }
+  .left-bar-expanded .left-bar-item {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding-inline: 0.65rem;
+    gap: 0.65rem;
+  }
+  .left-bar-expanded .left-bar-label { flex: 1; min-width: 0; }
+}
+
 .left-bar-expand:hover {
   background: var(--bg-hover);
   color: var(--text);
@@ -8739,10 +8755,42 @@ input[type="checkbox"]:checked::after {
   .left-bar .left-bar-avatar-link { width: 40px; height: 40px; }
   .left-bar .left-bar-avatar { padding: 0.35rem; }
 
+  /* Expansion is a desktop affordance. In portrait, preserve the bottom-tab
+     geometry even if the saved desktop preference says the rail was open. */
+  .left-bar-expanded { width: 100%; }
+  .left-bar-expanded .left-bar-nav { align-items: center; padding: 0 0.5rem; }
+  .left-bar-expanded .left-bar-item {
+    flex: 0 0 48px;
+    width: 48px;
+    min-width: 48px;
+    justify-content: center;
+    padding: 0.55rem;
+  }
+  .left-bar-expanded .left-bar-label { display: none; }
+
   .panel-list-link,
   .panel-user-item,
   .panel-column-expanded button,
   .panel-column-expanded [role="button"] {
     min-height: 48px;
   }
+}
+
+/* Give the message field the entire first row on phones. The placeholder stays
+   readable while the thumb-sized tools remain grouped below it. */
+@media (max-width: 480px) {
+  .composer-row {
+    display: grid;
+    grid-template-columns: repeat(3, 48px) minmax(0, 1fr) 48px;
+    gap: 0.25rem;
+    align-items: center;
+  }
+
+  .composer-input-wrap { grid-column: 1 / -1; grid-row: 1; width: 100%; }
+  .composer textarea { font-size: 16px; line-height: 1.35; }
+  .composer-actions { display: contents; }
+  .composer-actions #composer-mic { grid-column: 1; grid-row: 2; }
+  .composer-actions #attach-file { grid-column: 2; grid-row: 2; }
+  .composer-actions #composer-emoji { grid-column: 3; grid-row: 2; }
+  .composer-row > .composer-send { grid-column: 5; grid-row: 2; justify-self: end; }
 }
