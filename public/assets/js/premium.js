@@ -170,7 +170,7 @@ export async function openPremiumModal({ reason = 'manual' } = {}) {
   const available = (tier, plan) => prices?.[tier]?.[plan]?.available !== false;
 
   let selectedPlan = 'monthly';
-  let selectedTier = currentTier === 'free' ? 'premium' : currentTier;
+  let selectedTier = currentTier === 'free' ? 'premium' : currentTier === 'premium' ? 'plus' : 'plus';
 
   const cards = ['free', 'premium', 'plus'].map((tier) => {
     const info = features[tier] || { name: tierLabel(tier), features: [] };
@@ -186,24 +186,34 @@ export async function openPremiumModal({ reason = 'manual' } = {}) {
       </button>`;
   }).join('');
 
+  const tierIntro = currentTier === 'plus'
+    ? { title: 'You have the complete Venory plan', sub: 'Premium Plus is active on your account. Manage billing or review what is included.' }
+    : currentTier === 'premium'
+      ? { title: 'Your Premium plan is active', sub: 'Enjoy your Premium benefits, or compare Premium Plus for unlimited Venory messages.' }
+      : { title: 'Choose your Venory plan', sub: 'Get more daily messages, longer memory, and file uploads.' };
+  body.className = `premium-modal-content tier-view-${currentTier}`;
+  const isPlus = currentTier === 'plus';
+
   body.innerHTML = `
-    <div class="premium-head">
+    <div class="premium-head premium-head-${currentTier}">
       <span class="premium-crown">${crownSvg()}</span>
-      <h2 id="premium-modal-title">${deps.tx('premiumTitle', 'Upgrade to Premium')}</h2>
-      <p class="premium-sub">${deps.escapeHtml(reasonLine(reason)) || deps.tx('premiumSub', 'More Venory, bigger memory, file uploads.')}</p>
+      <span class="premium-account-state">${currentTier === 'free' ? 'FREE ACCOUNT' : `${tierLabel(currentTier).toUpperCase()} MEMBER`}</span>
+      <h2 id="premium-modal-title">${deps.escapeHtml(tierIntro.title)}</h2>
+      <p class="premium-sub">${deps.escapeHtml(reasonLine(reason)) || deps.tx('premiumSub', tierIntro.sub)}</p>
     </div>
+    ${isPlus ? `<div class="premium-member-callout"><strong>All Venory benefits are unlocked</strong><span>Unlimited messages, file uploads, and the largest memory tier.</span></div>` : ''}
     <div class="premium-plans-toggle" role="tablist">
       <button type="button" class="premium-plan-btn active" data-plan="monthly">${deps.tx('premiumMonthly', 'Monthly')}</button>
       <button type="button" class="premium-plan-btn" data-plan="yearly">${deps.tx('premiumYearly', 'Yearly')}</button>
       <span class="premium-plan-save">${deps.tx('premiumSave', 'Save ~17%')}</span>
     </div>
-    <div class="premium-tiers">${cards}</div>
+    <div class="premium-tiers premium-tiers-for-${currentTier}">${cards}</div>
     <div class="premium-status">${deps.tx('premiumYouAreOn', 'You are on {tier}').replace('{tier}', tierLabel(currentTier))}${
       status.body?.quota && !status.body.quota.unlimited
         ? ` \u00b7 ${status.body.quota.used}/${status.body.quota.limit} ${deps.tx('premiumMessagesToday', 'messages today')}`
         : ''}</div>
     <div class="premium-actions">
-      <button type="button" class="premium-btn primary" id="premium-subscribe">${deps.tx('premiumSubscribe', 'Subscribe')}</button>
+      ${isPlus ? '' : `<button type="button" class="premium-btn primary" id="premium-subscribe">${currentTier === 'premium' ? 'Upgrade to Premium Plus' : deps.tx('premiumSubscribe', 'Subscribe')}</button>`}
       ${currentTier !== 'free' ? `<button type="button" class="premium-btn ghost" id="premium-portal">${deps.tx('premiumManage', 'Manage subscription')}</button>` : ''}
       <button type="button" class="premium-btn ghost" data-premium-close>${deps.tx('premiumNotNow', 'Not now')}</button>
     </div>
@@ -224,7 +234,7 @@ export async function openPremiumModal({ reason = 'manual' } = {}) {
       sub.textContent = t === 'free'
         ? deps.tx('premiumPickPlan', 'Pick a plan')
         : ok
-          ? `${deps.tx('premiumSubscribe', 'Subscribe')} \u00b7 ${priceOf(t, selectedPlan)}`
+          ? `${currentTier === 'premium' && t === 'plus' ? 'Upgrade to Premium Plus' : deps.tx('premiumSubscribe', 'Subscribe')} \u00b7 ${priceOf(t, selectedPlan)}`
           : deps.tx('premiumUnavailable', 'Not available');
     }
   };
@@ -376,17 +386,19 @@ export function settingsPremiumHtml() {
     tx('premiumFeatContext', '{n} token memory').replace('{n}', limits.contextTokens >= 1000000 ? '1M' : `${Math.round(limits.contextTokens / 1000)}k`),
   ];
   return `
-    <h3 class="settings-section-title">${tx('premiumTitle', 'Upgrade to Premium')}</h3>
-    <div class="premium-settings-card">
+    <h3 class="settings-section-title">${tier === 'free' ? 'Venory plans' : tier === 'plus' ? 'Your Premium Plus membership' : 'Your Premium membership'}</h3>
+    <div class="premium-settings-card tier-view-${escapeHtml(tier)}">
       <div class="premium-settings-top">
         <span class="premium-plan-chip tier-${escapeHtml(tier)}">${escapeHtml(tierLabel(tier))}</span>
-        <span class="premium-settings-hint">${tx('premiumPlanHint', 'Your Venory plan')}</span>
+        <span class="premium-settings-hint">${tier === 'free' ? 'Choose the plan that fits you' : tier === 'plus' ? 'All Venory features are unlocked' : 'Your Premium benefits are active'}</span>
       </div>
       <ul class="premium-settings-features">${rows.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
       <div class="premium-settings-actions">
         ${tier === 'free'
           ? `<button type="button" class="premium-btn primary" data-premium-open="settings">${tx('premiumUpgrade', 'Upgrade')}</button>`
-          : `<button type="button" class="premium-btn ghost" data-premium-open="settings">${tx('premiumChangePlan', 'Change plan')}</button>`}
+          : tier === 'premium'
+            ? `<button type="button" class="premium-btn primary" data-premium-open="settings">Upgrade to Premium Plus</button>`
+            : `<button type="button" class="premium-btn ghost" data-premium-open="settings">${tx('premiumManage', 'Manage subscription')}</button>`}
         <button type="button" class="premium-btn ghost" id="premium-settings-learn">${tx('premiumSeeAll', 'Compare plans')}</button>
       </div>
     </div>`;

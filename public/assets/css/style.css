@@ -8915,3 +8915,55 @@ input[type="checkbox"]:checked::after {
 
   .left-bar.mobile-more-open { z-index: 600; }
 }
+
+/* Premium modal adapts its hierarchy to the account's current membership. */
+.premium-modal-content.tier-view-free .premium-head-free {
+  padding: 12px 8px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.premium-account-state {
+  display: block;
+  margin-top: 6px;
+  color: #c4b5fd;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+}
+.premium-head-premium .premium-crown { color: #c4b5fd; }
+.premium-head-plus .premium-crown { color: #f6c85f; filter: drop-shadow(0 0 10px rgba(246, 200, 95, 0.35)); }
+.premium-modal-content.tier-view-premium .premium-head h2 {
+  background-image: linear-gradient(90deg, #c4b5fd, #a78bfa);
+}
+.premium-modal-content.tier-view-plus .premium-head h2 {
+  background-image: linear-gradient(90deg, #f6c85f, #f0abfc);
+}
+.premium-member-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 18px 0 8px;
+  padding: 16px;
+  border: 1px solid rgba(246, 200, 95, 0.36);
+  border-radius: 14px;
+  background: linear-gradient(120deg, rgba(139, 92, 246, 0.18), rgba(246, 200, 95, 0.1));
+  text-align: center;
+}
+.premium-member-callout strong { color: #f8e6a0; font-size: 15px; }
+.premium-member-callout span { color: rgba(255, 255, 255, 0.72); font-size: 12px; }
+.premium-tiers-for-premium .premium-tier[data-tier="plus"] {
+  border-color: rgba(217, 70, 239, 0.48);
+  background: rgba(139, 92, 246, 0.09);
+}
+.premium-tiers-for-plus .premium-tier.current {
+  border-color: rgba(246, 200, 95, 0.7);
+  background: linear-gradient(150deg, rgba(139, 92, 246, 0.18), rgba(246, 200, 95, 0.08));
+}
+.premium-settings-card.tier-view-free { border-color: rgba(167, 139, 250, 0.42); }
+.premium-settings-card.tier-view-premium { background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(139, 92, 246, 0.05)); }
+.premium-settings-card.tier-view-plus { background: linear-gradient(135deg, rgba(139, 92, 246, 0.17), rgba(246, 200, 95, 0.09)); border-color: rgba(246, 200, 95, 0.4); }
+.premium-settings-card.tier-view-plus .premium-plan-chip { background: linear-gradient(135deg, #8b5cf6, #d946ef 60%, #d7a843); }
+@media (max-width: 620px) {
+  .premium-modal-body { padding: 22px 16px 18px; }
+  .premium-member-callout { margin-top: 12px; }
+  .premium-modal-content.tier-view-plus .premium-plans-toggle { margin-top: 12px; }
+}
