@@ -138,6 +138,7 @@ const EMAIL_VERIFY_SKIP_DOMAINS = [
   'acsd.org',
   'my.cuhsd.org',
   'agustibarbera.cat',
+  'st.homercenter.org',
 ];
 
 function emailVerifySkipped(email) {
