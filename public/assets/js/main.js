@@ -5697,43 +5697,54 @@ function renderMain() {
           </a>
         </div>
         <nav class="left-bar-nav" aria-label="Main">
-          <a href="/chat/group/" class="left-bar-item ${primaryNav === 'home' ? 'active' : ''}" title="Home (JimmyQrg group chat)">
+          <a href="/chat/group/" class="left-bar-item mobile-primary-nav ${primaryNav === 'home' ? 'active' : ''}" title="Home (JimmyQrg group chat)">
             <span class="left-bar-icon-wrap"><span class="left-bar-icon" aria-hidden="true">${ICON_HOME}</span>${hasNewGroupMessages() ? '<span class="left-bar-badge left-bar-badge-dot" aria-label="New messages"></span>' : ''}</span>
             <span class="left-bar-label">${t('home')}</span>
           </a>
-          <a href="/chat" class="left-bar-item ${primaryNav === 'chat' ? 'active' : ''}" title="${t('chat')} (private messages)">
+          <a href="/chat" class="left-bar-item mobile-primary-nav ${primaryNav === 'chat' ? 'active' : ''}" title="${t('chat')} (private messages)">
             <span class="left-bar-icon-wrap"><span class="left-bar-icon" aria-hidden="true">${ICON_CHAT}</span>${(function(){ const n = getTotalNewDmCount(); return n > 0 ? `<span class="left-bar-badge left-bar-badge-count" aria-label="${n} new">${n > 99 ? '99+' : n}</span>` : ''; })()}</span>
             <span class="left-bar-label">${t('chat')}</span>
           </a>
-          <a href="/inbox" class="left-bar-item ${primaryNav === 'inbox' ? 'active' : ''}" title="${t('inbox')}">
+          <a href="/inbox" class="left-bar-item mobile-primary-nav ${primaryNav === 'inbox' ? 'active' : ''}" title="${t('inbox')}">
             <span class="left-bar-icon-wrap"><span class="left-bar-icon" aria-hidden="true">${ICON_INBOX}</span>${(function(){ const n = getUnreadInboxCount(); return n > 0 ? `<span class="left-bar-badge left-bar-badge-count" aria-label="${n} unread">${n > 99 ? '99+' : n}</span>` : ''; })()}</span>
             <span class="left-bar-label">${t('inbox')}</span>
           </a>
-          <a href="/collections" class="left-bar-item ${primaryNav === 'collections' ? 'active' : ''}" title="${tx('collections', 'Collections')}">
+          <a href="/collections" class="left-bar-item mobile-desktop-nav ${primaryNav === 'collections' ? 'active' : ''}" title="${tx('collections', 'Collections')}">
             <span class="left-bar-icon" aria-hidden="true">${ICON_COLLECTION}</span>
             <span class="left-bar-label">${tx('collections', 'Collections')}</span>
           </a>
           ${state.user?.is_allowed ? `
-          <a href="/manage" class="left-bar-item ${primaryNav === 'admin' ? 'active' : ''}" title="Admin">
+          <a href="/manage" class="left-bar-item mobile-desktop-nav ${primaryNav === 'admin' ? 'active' : ''}" title="Admin">
             <span class="left-bar-icon" aria-hidden="true">${ICON_ADMIN}</span>
             <span class="left-bar-label">${t('admin')}</span>
           </a>
           ` : ''}
-          <a href="/settings?tab=profile" class="left-bar-item ${primaryNav === 'settings' ? 'active' : ''}" title="${t('settings')}">
+          <a href="/settings?tab=profile" class="left-bar-item mobile-desktop-nav ${primaryNav === 'settings' ? 'active' : ''}" title="${t('settings')}">
             <span class="left-bar-icon" aria-hidden="true">${ICON_SETTINGS}</span>
             <span class="left-bar-label">${t('settings')}</span>
           </a>
-          <button type="button" class="left-bar-item premium-left-bar ${isPremiumUser() ? 'is-premium' : ''}" data-premium-open="nav" title="${tx('premiumTitle', 'Upgrade to Premium')}">
+          <button type="button" class="left-bar-item mobile-desktop-nav premium-left-bar ${isPremiumUser() ? 'is-premium' : ''}" data-premium-open="nav" title="${tx('premiumTitle', 'Upgrade to Premium')}">
             <span class="left-bar-icon-wrap"><span class="left-bar-icon" aria-hidden="true">${premiumCrownSvg()}</span>${isPremiumUser() ? '' : `<span class="left-bar-badge premium-badge-dot"></span>`}</span>
             <span class="left-bar-label">${tx('premiumNavLabel', 'Premium')}</span>
           </button>
           ${isNativeApp() ? '' : `
-          <a href="/install/" target="_self" class="left-bar-item" title="Install the app">
+          <a href="/install/" target="_self" class="left-bar-item mobile-desktop-nav" title="Install the app">
             <span class="left-bar-icon" aria-hidden="true">${ICON_DOWNLOAD}</span>
             <span class="left-bar-label">${tx('install', 'Install')}</span>
           </a>
           `}
+          <button type="button" class="left-bar-item mobile-nav-more-toggle ${['home', 'chat', 'inbox'].includes(primaryNav) ? '' : 'active'}" id="mobile-nav-more-toggle" aria-expanded="false" aria-controls="mobile-nav-more-menu" title="${tx('more', 'More')}">
+            <span class="left-bar-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></span>
+            <span class="left-bar-label">${tx('more', 'More')}</span>
+          </button>
         </nav>
+        <div class="mobile-nav-more-menu" id="mobile-nav-more-menu" role="menu" aria-label="${tx('more', 'More')}" hidden>
+          <a href="/collections" class="mobile-nav-more-link" role="menuitem"><span class="left-bar-icon" aria-hidden="true">${ICON_COLLECTION}</span>${tx('collections', 'Collections')}</a>
+          ${state.user?.is_allowed ? `<a href="/manage" class="mobile-nav-more-link" role="menuitem"><span class="left-bar-icon" aria-hidden="true">${ICON_ADMIN}</span>${t('admin')}</a>` : ''}
+          <a href="/settings?tab=profile" class="mobile-nav-more-link" role="menuitem"><span class="left-bar-icon" aria-hidden="true">${ICON_SETTINGS}</span>${t('settings')}</a>
+          <button type="button" class="mobile-nav-more-link" role="menuitem" data-premium-open="nav"><span class="left-bar-icon" aria-hidden="true">${premiumCrownSvg()}</span>${tx('premiumNavLabel', 'Premium')}</button>
+          ${isNativeApp() ? '' : `<a href="/install/" target="_self" class="mobile-nav-more-link" role="menuitem"><span class="left-bar-icon" aria-hidden="true">${ICON_DOWNLOAD}</span>${tx('install', 'Install')}</a>`}
+        </div>
         <div class="left-bar-bottom">
           <button type="button" class="left-bar-expand" id="left-bar-expand" title="${expanded ? t('collapse') : t('expand')}">
             <span class="left-bar-icon" aria-hidden="true">${expanded ? ICON_CHEVRON_LEFT : ICON_CHEVRON_RIGHT}</span>
@@ -13248,6 +13259,22 @@ async function init() {
     // Delegated listeners for expand/toggle: update state + toggle class on existing DOM (no setState)
     // so first click works and CSS transition/animation run on the same element
     appEl.addEventListener('click', (e) => {
+      const moreToggle = e.target.closest('#mobile-nav-more-toggle');
+      const leftBar = document.getElementById('left-bar');
+      const moreMenu = document.getElementById('mobile-nav-more-menu');
+      if (moreToggle && leftBar && moreMenu) {
+        e.preventDefault();
+        const open = !leftBar.classList.contains('mobile-more-open');
+        leftBar.classList.toggle('mobile-more-open', open);
+        moreToggle.setAttribute('aria-expanded', String(open));
+        moreMenu.hidden = !open;
+        return;
+      }
+      if (leftBar?.classList.contains('mobile-more-open')) {
+        leftBar.classList.remove('mobile-more-open');
+        document.getElementById('mobile-nav-more-toggle')?.setAttribute('aria-expanded', 'false');
+        if (moreMenu) moreMenu.hidden = true;
+      }
       const toggle = e.target.closest('#panel-column-toggle');
       const expand = e.target.closest('#left-bar-expand');
       const overlay = e.target.closest('#panel-column-overlay');
