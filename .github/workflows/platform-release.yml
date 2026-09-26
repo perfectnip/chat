@@ -1,4 +1,4 @@
-name: Build Chromebook and Windows apps
+name: Build Chromebook, Windows, and Linux apps
 
 on:
   push:
@@ -73,7 +73,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [chromebook, windows]
+    needs: [chromebook, windows, linux]
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -83,17 +83,47 @@ jobs:
         with:
           name: windows-installer
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-installers
+          path: dist
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.7-platforms
           target_commitish: main
-          name: JimmyQrg Chat — Chromebook and Windows
+          name: JimmyQrg Chat — Chromebook, Windows, and Linux
           body: |
             JimmyQrg Chat v1.7 desktop and Chromebook packages.
 
             - Chromebook: Android APK for Chromebooks with Android app support. ChromeOS devices that restrict APK sideloading can install the web app from Chrome instead.
             - Windows: x64 setup installer. It opens the live JimmyQrg Chat service in its own desktop window.
+            - Linux: x64 AppImage and Debian package (.deb). The app opens the live JimmyQrg Chat service in its own desktop window.
           files: |
             dist/JimmyQrg-Chat-Android-Chromebook.apk
             dist/JimmyQrg-Chat-Windows-Setup.exe
+            dist/JimmyQrg-Chat-Linux-x64.AppImage
+            dist/JimmyQrg-Chat-Linux-x64.deb
           overwrite_files: true
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/windows/package-lock.json
+      - name: Install packaging dependencies
+        working-directory: desktop/windows
+        run: npm ci
+      - name: Build Linux packages
+        working-directory: desktop/windows
+        run: npm run dist:linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-installers
+          path: |
+            desktop/windows/dist/JimmyQrg-Chat-Linux-x64.AppImage
+            desktop/windows/dist/JimmyQrg-Chat-Linux-x64.deb
+          if-no-files-found: error

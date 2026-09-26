@@ -5,7 +5,8 @@
   "private": true,
   "main": "main.cjs",
   "scripts": {
-    "dist": "electron-builder --win nsis --x64"
+    "dist": "electron-builder --win nsis --x64",
+    "dist:linux": "electron-builder --linux AppImage deb --x64"
   },
   "devDependencies": {
     "electron": "44.4.5",
@@ -28,6 +29,11 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "JimmyQrg Chat"
+    },
+    "linux": {
+      "category": "Network",
+      "target": ["AppImage", "deb"],
+      "artifactName": "JimmyQrg-Chat-Linux-x64.${ext}"
     }
   }
 }
