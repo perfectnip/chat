@@ -2,6 +2,11 @@
   "name": "jimmyqrg-chat-windows",
   "version": "1.7.0",
   "description": "JimmyQrg Chat desktop app for Windows",
+  "homepage": "https://jchat.fly.dev",
+  "author": {
+    "name": "perfectnip",
+    "email": "perfectnip@users.noreply.github.com"
+  },
   "desktopName": "JimmyQrg Chat",
   "private": true,
   "main": "main.cjs",

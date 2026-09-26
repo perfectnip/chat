@@ -5,6 +5,7 @@
   "files": ["main.cjs", "package.json"],
   "linux": {
     "category": "Network",
+    "maintainer": "perfectnip <perfectnip@users.noreply.github.com>",
     "icon": "../../public/assets/icons/favicon-256.png",
     "target": ["AppImage", "deb"],
     "artifactName": "JimmyQrg-Chat-Linux-x64.${ext}"
