@@ -6,7 +6,6 @@
   "linux": {
     "category": "Network",
     "icon": "../../public/assets/icons/favicon-256.png",
-    "desktopName": "JimmyQrg Chat",
     "target": ["AppImage", "deb"],
     "artifactName": "JimmyQrg-Chat-Linux-x64.${ext}"
   }

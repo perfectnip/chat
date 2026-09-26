@@ -2,6 +2,7 @@
   "name": "jimmyqrg-chat-windows",
   "version": "1.7.0",
   "description": "JimmyQrg Chat desktop app for Windows",
+  "desktopName": "JimmyQrg Chat",
   "private": true,
   "main": "main.cjs",
   "scripts": {
