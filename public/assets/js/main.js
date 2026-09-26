@@ -2787,7 +2787,7 @@ function isFriendRequestPending(userId) {
  *  - Resolves with `{ message }` on success or `{ error }` on server rejection.
  *  - Rejects only on transport / network failures.
  */
-async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTimeoutMs = 12000, agent_model, agent_effort, agent_opencode_model, agent_codex_model }) {
+async function sendMessageResilient({ roomType, roomId, text, reply_to_id, venory_persona, ackTimeoutMs = 12000, agent_model, agent_effort, agent_opencode_model, agent_codex_model }) {
   const socket = state.socket;
   const socketReady = socket && socket.connected;
   // AI moderation can take a couple of seconds, especially on cold starts or
@@ -2798,6 +2798,7 @@ async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTi
       const res = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('timeout')), ackTimeoutMs);
         const payload = { roomType, roomId, content: text, reply_to_id };
+        if (venory_persona) payload.venory_persona = venory_persona;
         if (agent_model) payload.agent_model = agent_model;
         if (agent_effort) payload.agent_effort = agent_effort;
         if (agent_opencode_model) payload.agent_opencode_model = agent_opencode_model;
@@ -2821,6 +2822,7 @@ async function sendMessageResilient({ roomType, roomId, text, reply_to_id, ackTi
     : `/api/rooms/${roomType}/${roomId}/messages`;
   const body = { content: text };
   if (reply_to_id) body.reply_to_id = reply_to_id;
+  if (venory_persona) body.venory_persona = venory_persona;
   if (agent_model) body.agent_model = agent_model;
   if (agent_effort) body.agent_effort = agent_effort;
   if (agent_opencode_model) body.agent_opencode_model = agent_opencode_model;
@@ -6194,6 +6196,18 @@ function isOwner() {
 function isHelperDm() {
   return state.dmUserId === HELPER_BOT_ID;
 }
+function venoryDmPersona() {
+  if (!isHelperDm()) return 'support';
+  try {
+    const saved = localStorage.getItem(`venory-dm-persona:${state.user?.id || 'guest'}:${state.convId || ''}`);
+    return saved === 'chat' ? 'chat' : 'support';
+  } catch (_) { return 'support'; }
+}
+function venoryPersonaSendOptions(roomType, roomId) {
+  if (roomType === 'dm' && isHelperDm()) return { venory_persona: venoryDmPersona() };
+  if (roomType === 'group') return { venory_persona: roomId === 'free_chat' ? 'chat' : 'support' };
+  return {};
+}
 function helperDmKey() {
   return isHelperDm() && state.convId ? roomKey('dm', state.convId) : null;
 }
@@ -7834,6 +7848,13 @@ function renderChatArea() {
       ${state.user?.can_pin_messages ? `<button type="button" class="pinned-message-unpin" title="${tx('unpinMessage', 'Unpin message')}" aria-label="${tx('unpinMessage', 'Unpin message')}"><span class="icon" aria-hidden="true">${ICON_X_SM}</span></button>` : ''}
     </div>` : '';
 
+  const venoryPersona = venoryDmPersona();
+  const venoryPersonaToggle = roomType === 'dm' && isHelperDm() ? `
+    <div class="venory-persona-switch" role="group" aria-label="Venory personality">
+      <span class="venory-persona-caption">Venory</span>
+      <button type="button" data-venory-persona="chat" class="${venoryPersona === 'chat' ? 'is-active' : ''}" aria-pressed="${venoryPersona === 'chat'}">Chat</button>
+      <button type="button" data-venory-persona="support" class="${venoryPersona === 'support' ? 'is-active' : ''}" aria-pressed="${venoryPersona === 'support'}">Support</button>
+    </div>` : '';
   const headerSubtitle = (() => {
     if (roomType === 'group') {
       const onlineCount = (state.users || []).filter((u) => u.id !== state.user?.id && getPresence(u.id)?.state === 'online').length + (getPresence(state.user?.id)?.state === 'online' ? 1 : 0);
@@ -7843,6 +7864,7 @@ function renderChatArea() {
         .replace('{total}', totalCount)}</span></span>`;
     }
     if (roomType === 'dm' && state.dmUserId) {
+      if (isHelperDm()) return '';
       const presence = getPresence(state.dmUserId);
       const status = presence ? presenceLabel(presence) : tx('presenceOffline', 'Offline');
       return `<span class="chat-header-subtitle">${presenceDot(state.dmUserId)} <span class="presence-label">${escapeHtml(status)}</span></span>`;
@@ -7857,6 +7879,7 @@ function renderChatArea() {
         <div class="chat-header">
           <div class="chat-header-title">${escapeHtml(getChatHeaderTitle(roomType, roomId))}</div>
           ${headerSubtitle}
+          ${venoryPersonaToggle}
           <button type="button" class="chat-header-menu-btn" id="chat-header-menu-btn" title="${tx('more', 'More')}" aria-expanded="${sidePanelOpen}"><span class="icon" aria-hidden="true">${ICON_ELLIPSIS_V}</span></button>
         </div>
         ${pinnedBanner}
@@ -10179,6 +10202,17 @@ function bindMain() {
     const roomId = state.dmUserId ? state.convId : state.panel;
     apiDelete(`/api/admin/pin/${roomType}/${roomId}`).catch((err) => showToast(err.message || 'Failed to unpin'));
   });
+  document.querySelectorAll('[data-venory-persona]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const persona = button.dataset.venoryPersona === 'chat' ? 'chat' : 'support';
+      try { localStorage.setItem(`venory-dm-persona:${state.user?.id || 'guest'}:${state.convId || ''}`, persona); } catch (_) {}
+      document.querySelectorAll('[data-venory-persona]').forEach((option) => {
+        const active = option.dataset.venoryPersona === persona;
+        option.classList.toggle('is-active', active);
+        option.setAttribute('aria-pressed', String(active));
+      });
+    });
+  });
   document.getElementById('chat-header-menu-btn')?.addEventListener('click', (e) => {
     const isDm = !!state.dmUserId;
     if (isDm) {
@@ -10884,7 +10918,7 @@ function bindMain() {
       if (hasPlaintextLine(text)) {
         const reply_to_id = state.replyTo?.id || null;
         state._sendingMessage = true;
-        sendMessageResilient({ roomType, roomId, text, reply_to_id, ...agentOptsForSend() })
+        sendMessageResilient({ roomType, roomId, text, reply_to_id, ...venoryPersonaSendOptions(roomType, roomId), ...agentOptsForSend() })
           .then((res) => {
             state._sendingMessage = false;
             if (res?.error) {
@@ -11120,7 +11154,7 @@ function bindMain() {
         });
         return;
       }
-      sendMessageResilient({ roomType, roomId, text, reply_to_id, ...agentOptsForSend() })
+      sendMessageResilient({ roomType, roomId, text, reply_to_id, ...venoryPersonaSendOptions(roomType, roomId), ...agentOptsForSend() })
         .then((res) => {
           done();
           if (res?.error) {

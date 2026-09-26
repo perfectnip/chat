@@ -530,12 +530,16 @@ async function runAgentOnce(task, controller) {
   }
   const sessionKey = resolveTaskSessionKey(task);
   const userMessage = await buildTaskUserMessage(task, content);
+  const personaNote = task.venoryPersona === 'chat'
+    ? 'Venory persona for this DM: casual chat companion. Be friendly and conversational; do not turn ordinary chat into a support interaction. Answer direct questions naturally.'
+    : 'Venory persona for this DM: support assistant. Be practical, patient, and focused on helping the user solve their issue.';
   const payload = {
     model: MODEL,
-    // System message → merged into the agent's system prompt by the gateway,
+    // System messages → merged into the agent's system prompt by the gateway,
     // invisible in the user-visible chat/session history.
     messages: [
       { role: 'system', content: MESSAGE_SOURCE_NOTE },
+      { role: 'system', content: personaNote },
       userMessage,
     ],
     stream: false,
@@ -741,8 +745,11 @@ async function runOpencodeOnce(task, controller) {
       text = `${text}\n\n[User attached a file: ${att.originalName || att.filename} — it could not be downloaded (unavailable).]`;
     }
   }
+  const personaNote = task.venoryPersona === 'chat'
+    ? 'In this Venory DM, use a casual chat companion personality. Be friendly and conversational; do not treat ordinary conversation as a request for support. Answer direct questions naturally.'
+    : 'In this Venory DM, use a support assistant personality. Be practical, patient, and focused on helping the user solve their issue.';
   const payload = {
-    system: OPENCODE_SYSTEM_NOTE,
+    system: `${OPENCODE_SYSTEM_NOTE} ${personaNote}`,
     parts: [{ type: 'text', text }],
   };
   // Optional model override (provider/model → { providerID, modelID }).

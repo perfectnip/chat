@@ -8967,3 +8967,44 @@ input[type="checkbox"]:checked::after {
   .premium-member-callout { margin-top: 12px; }
   .premium-modal-content.tier-view-plus .premium-plans-toggle { margin-top: 12px; }
 }
+
+/* Venory has separate casual-chat and support personalities in DMs. */
+.venory-persona-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+}
+.venory-persona-caption {
+  padding: 0 7px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+.venory-persona-switch button {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 650;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.venory-persona-switch button.is-active {
+  background: var(--purple-bright, #8b5cf6);
+  color: #fff;
+}
+.chat-header:has(.venory-persona-switch) .chat-header-title { flex: 1 1 auto; min-width: 0; }
+@media (max-width: 600px), (max-aspect-ratio: 1/1) and (max-width: 900px) {
+  .venory-persona-caption { display: none; }
+  .venory-persona-switch { gap: 1px; }
+  .venory-persona-switch button { min-height: 36px; padding: 0 9px; }
+}
