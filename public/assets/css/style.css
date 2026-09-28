@@ -6749,6 +6749,19 @@ input[type="checkbox"]:checked::after {
   border: 1px solid var(--purple-dim);
   color: var(--text);
 }
+.toast-action {
+  display: block;
+  margin-top: 0.55rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--purple-dim);
+  border-radius: 6px;
+  background: rgba(139, 92, 246, 0.16);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.toast-action:hover { background: rgba(139, 92, 246, 0.28); }
 @keyframes toast-in {
   from {
     opacity: 0;

@@ -369,17 +369,23 @@
           </div>
           <div>
             <h2>Chromebook</h2>
-            <p>ChromeOS app (Android APK)</p>
+            <p>Install from Chrome or use the Android APK</p>
           </div>
         </div>
         <div class="card-body">
-          Install the Android app on Chromebooks that support Android apps. This APK is also available for Android phones.
+          Install JimmyQrg Chat from Chrome as a desktop web app, or use the Android app on Chromebooks that support Android apps. The APK is also available for Android phones.
         </div>
         <div class="meta">
           <span class="pill"><span class="dot"></span>v1.7</span>
           <span class="pill">ChromeOS with Play Store</span>
           <span class="pill">Android 7.0+</span>
         </div>
+        <button class="install-btn" type="button" id="chromebook-web-install">
+          <span>Install Chat from Chrome</span>
+        </button>
+        <p id="chromebook-web-install-help" role="status" aria-live="polite" style="margin:8px 0 16px;color:var(--muted);font-size:13px">
+          Opens as its own app window. If Chrome doesn’t show an install prompt, use the install icon in the address bar or Chrome menu → Install JimmyQrg Chat.
+        </p>
         <a class="install-btn" href="https://github.com/perfectnip/chat/releases/download/v1.7-platforms/JimmyQrg-Chat-Android-Chromebook.apk" rel="noopener" download>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
           <span>Download Chromebook APK</span>
@@ -547,6 +553,39 @@
           .then(function (d) { apply(d.strings); })
           .catch(function () {});
       } catch (e) {}
+    })();
+    (function () {
+      var button = document.getElementById('chromebook-web-install');
+      var help = document.getElementById('chromebook-web-install-help');
+      if (!button || !help) return;
+      var installPrompt = null;
+      var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+      if (standalone) {
+        button.querySelector('span').textContent = 'Chat is already installed';
+        button.disabled = true;
+      }
+      window.addEventListener('beforeinstallprompt', function (event) {
+        event.preventDefault();
+        installPrompt = event;
+      });
+      button.addEventListener('click', async function () {
+        if (!installPrompt) {
+          help.textContent = 'In Chrome, choose the install icon at the right of the address bar, or open ⋮ → Cast, save, and share → Install page as app.';
+          return;
+        }
+        installPrompt.prompt();
+        var choice = await installPrompt.userChoice;
+        installPrompt = null;
+        if (choice && choice.outcome === 'accepted') {
+          button.querySelector('span').textContent = 'Installing Chat…';
+          help.textContent = 'JimmyQrg Chat is being installed from Chrome.';
+        }
+      });
+      window.addEventListener('appinstalled', function () {
+        button.querySelector('span').textContent = 'Chat is already installed';
+        button.disabled = true;
+        help.textContent = 'Open JimmyQrg Chat from the Chromebook launcher.';
+      });
     })();
   </script>
 </body>

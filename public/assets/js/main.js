@@ -182,7 +182,7 @@ if (typeof window !== 'undefined' && !window._pendingFileUnloadGuardBound) {
 }
 
 /** Toast notifications (replacement for alert). type: 'error' | 'success' | 'info' */
-function showToast(message, type = 'error') {
+function showToast(message, type = 'error', { duration = 4000, actionLabel, onAction } = {}) {
   if (typeof document === 'undefined') return;
   let container = document.getElementById('toast-container');
   if (!container) {
@@ -194,14 +194,29 @@ function showToast(message, type = 'error') {
   }
   const el = document.createElement('div');
   el.className = `toast toast--${type}`;
-  el.textContent = message;
+  const text = document.createElement('span');
+  text.textContent = message;
+  el.appendChild(text);
   container.appendChild(el);
   const dismiss = () => {
     el.classList.add('toast--dismissed');
     setTimeout(() => el.remove(), 200);
   };
-  setTimeout(dismiss, 4000);
+  if (duration > 0) setTimeout(dismiss, duration);
   el.addEventListener('click', dismiss);
+  if (actionLabel && typeof onAction === 'function') {
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'toast-action';
+    action.textContent = actionLabel;
+    action.addEventListener('click', (event) => {
+      event.stopPropagation();
+      onAction();
+      dismiss();
+    });
+    el.appendChild(action);
+  }
+  return el;
 }
 
 const HTML_MAX_BYTES = 100 * 1024 * 1024;
@@ -6334,12 +6349,10 @@ function clearAgentSessionViews() {
   if (state.codexSessionView) { state.codexSessionView = null; }
 }
 
-// Auto-update: poll /api/version; when it changes a new deploy is live, so
-// reload and pick up the fresh assets. Drafts survive via localStorage and
-// polling pauses while the tab is hidden.
+// Check for new deployments while the app is open. Never interrupt a chat by
+// forcing a reload; show a persistent prompt and let the user choose when.
 function initAutoUpdate() {
   const CHECK_MS = 60000;
-  const RELOAD_DELAY_MS = 4000;
   const RELOAD_TARGET_KEY = 'jchat:auto-update-target';
   let updating = false;
   const check = async () => {
@@ -6361,13 +6374,13 @@ function initAutoUpdate() {
         }
         sessionStorage.setItem(RELOAD_TARGET_KEY, v);
       } catch (_) {}
+      state.appVersion = v;
       updating = true;
-      showToast(tx('appUpdated', 'New version available — reloading…'), 'info');
-      setTimeout(() => {
-        const next = new URL(location.href);
-        next.searchParams.set('__jchat_update', v);
-        location.replace(next.toString());
-      }, RELOAD_DELAY_MS);
+      showToast(tx('appUpdateReady', 'An update is ready. Reload when convenient.'), 'info', {
+        duration: 0,
+        actionLabel: tx('reloadNow', 'Reload'),
+        onAction: () => location.reload(),
+      });
     } catch (_) { /* transient network hiccup: keep current baseline */ }
   };
   check();
