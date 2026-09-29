@@ -9,7 +9,7 @@ const router = Router();
 
 // Release gate. Flip to true on release day (keep in sync with the frontend
 // ANNIV_PENDING flag). While false, only jimmyqrg can submit, in test mode.
-const ANNIVERSARY_RELEASED = false;
+const ANNIVERSARY_RELEASED = true;
 
 // Tables (idempotent).
 db.exec(`
